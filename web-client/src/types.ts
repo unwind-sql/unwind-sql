@@ -25,6 +25,7 @@ export interface DagNode {
   row_count: number | null;
   materialized: Materialization;
   location: string | null;
+  disabled: boolean;
 }
 
 export interface DagEdge {

@@ -118,7 +118,30 @@ def _execute(
 
     for name in dag.execution_order:
         model = project.models[name]
+        parents = sorted(dag.nodes[name].depends_on_models)
         model_start = time.perf_counter()
+        if model.disabled:
+            try:
+                kind_label = _materialize_disabled(conn, name, parents, debug=debug)
+            except duckdb.Error as exc:
+                raise RunError(name, str(exc)) from exc
+            if kind_label is None:
+                if debug:
+                    print(f"-- {name}: skipped (disabled, no parents)")
+                continue
+            try:
+                row = conn.execute(
+                    f"SELECT COUNT(*) FROM {_quote_ident(name)}"
+                ).fetchone()
+            except duckdb.Error as exc:
+                raise RunError(name, str(exc)) from exc
+            assert row is not None, "COUNT(*) always returns a row"
+            rows = int(row[0])
+            duration = time.perf_counter() - model_start
+            executed.append(ExecutedModel(name=name, row_count=rows, duration_s=duration))
+            if debug:
+                print(f"-- {name}: {rows} rows in {duration * 1000:.1f} ms ({kind_label})")
+            continue
         try:
             kind_label = materialize_model(
                 conn,
@@ -165,6 +188,34 @@ def materialize_model(
             conn, model, variables=variables, project_root=project_root, debug=debug
         )
     return _materialize_sql(conn, model, respect_external=respect_external, debug=debug)
+
+
+def _materialize_disabled(
+    conn: duckdb.DuckDBPyConnection,
+    name: str,
+    parents: list[str],
+    *,
+    debug: bool,
+) -> str | None:
+    """Materialize a disabled model as a view aliasing its first parent.
+
+    Blender-style mute: skip the body entirely and forward the first parent's
+    rows under this model's name so children referencing it keep working.
+    Returns the `kind_label` used by the runner, or `None` when the model has
+    no parents (in which case we leave nothing materialized — downstream
+    references will surface a clear "Table not found" at run time).
+    """
+    if not parents:
+        return None
+    alias = parents[0]
+    statement = (
+        f"CREATE OR REPLACE VIEW {_quote_ident(name)} AS "
+        f"SELECT * FROM {_quote_ident(alias)}"
+    )
+    if debug:
+        print(f"-- {name} (disabled -> aliasing {alias})\n{statement}")
+    conn.execute(statement)
+    return "disabled"
 
 
 def _materialize_sql(

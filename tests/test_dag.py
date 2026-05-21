@@ -13,6 +13,7 @@ EXAMPLE_RAW = {"raw_orders", "raw_shipments", "raw_refunds"}
 EXAMPLE_REF = {"ref_carrier_rates", "ref_local_taxes"}
 EXAMPLE_INT = {
     "int_order_base",
+    "int_orders_dedup",
     "int_transport_costs",
     "int_tax_costs",
     "int_net_margin_per_order",
@@ -30,7 +31,8 @@ def test_example_project_dag(example_models_dir: Path) -> None:
     order = list(dag.execution_order)
     # raw/ref leaves come first (any order between them), then int_, then fct_.
     assert set(order[: len(EXAMPLE_RAW | EXAMPLE_REF)]) == EXAMPLE_RAW | EXAMPLE_REF
-    assert order.index("int_order_base") < order.index("int_transport_costs")
+    assert order.index("int_order_base") < order.index("int_orders_dedup")
+    assert order.index("int_orders_dedup") < order.index("int_transport_costs")
     assert order.index("int_transport_costs") < order.index("int_tax_costs")
     assert order.index("int_tax_costs") < order.index("int_net_margin_per_order")
     assert order.index("int_net_margin_per_order") < order.index("fct_warehouse_profitability")
@@ -66,6 +68,7 @@ def test_upstream_and_downstream(example_models_dir: Path) -> None:
             "ref_carrier_rates",
             "ref_local_taxes",
             "int_order_base",
+            "int_orders_dedup",
             "int_transport_costs",
         }
     )
@@ -85,12 +88,14 @@ def test_subdag(example_models_dir: Path) -> None:
         "ref_carrier_rates",
         "ref_local_taxes",
         "int_order_base",
+        "int_orders_dedup",
         "int_transport_costs",
         "int_tax_costs",
     }
     sub_order = list(sub.execution_order)
     assert sub_order[-1] == "int_tax_costs"
-    assert sub_order.index("int_order_base") < sub_order.index("int_transport_costs")
+    assert sub_order.index("int_order_base") < sub_order.index("int_orders_dedup")
+    assert sub_order.index("int_orders_dedup") < sub_order.index("int_transport_costs")
 
 
 def test_unknown_model_raises(example_models_dir: Path) -> None:

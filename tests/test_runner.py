@@ -10,7 +10,7 @@ import pytest
 import unwind
 from unwind.runner import ExecutedModel, RunError
 
-EXAMPLE_MODEL_COUNT = 10
+EXAMPLE_MODEL_COUNT = 11
 EXAMPLE_ORDERS_ROW_COUNT = 11  # raw_orders has 11 rows (10 normal + 1 outlier)
 EXAMPLE_FILTERED_ORDERS = 10  # int_order_base filters out qty == 0 (ORD-1009)
 
@@ -163,3 +163,88 @@ def test_run_external_with_jinja_location(tmp_path: Path) -> None:
     )
     unwind.load(tmp_path).run(engine="duckdb")
     assert (tmp_path / "out.parquet").exists()
+
+
+def test_run_disabled_model_bypasses_to_first_parent(tmp_path: Path) -> None:
+    """Blender-style mute: disabled model is aliased to its (alphabetically) first parent."""
+    (tmp_path / "src.sql").write_text(
+        "SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(id, label);",
+        encoding="utf-8",
+    )
+    # `middle` is muted. Its body would only emit `id`, but the bypass aliases
+    # it to `src`, so children that SELECT `label` still work.
+    (tmp_path / "middle.sql").write_text(
+        "-- @disabled: true\nSELECT id FROM src;\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "leaf.sql").write_text(
+        "SELECT id, label FROM middle;\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "out.duckdb"
+    result = unwind.load(tmp_path).run(engine="duckdb", database=db_path)
+
+    by_name = {m.name: m.row_count for m in result.executed}
+    assert by_name == {"src": 2, "middle": 2, "leaf": 2}
+
+    with duckdb.connect(str(db_path)) as conn:
+        # `middle` keeps the `label` column because it forwarded `src`, not its own body.
+        cols = {r[0] for r in conn.execute("DESCRIBE middle").fetchall()}
+        assert cols == {"id", "label"}
+        rows = conn.execute("SELECT * FROM leaf ORDER BY id").fetchall()
+    assert rows == [(1, "a"), (2, "b")]
+
+
+def test_run_disabled_chain_bypasses_through(tmp_path: Path) -> None:
+    """Two disabled models in a row: leaf still resolves to the live source."""
+    (tmp_path / "src.sql").write_text(
+        "SELECT * FROM (VALUES (10), (20)) AS t(id);",
+        encoding="utf-8",
+    )
+    (tmp_path / "mid1.sql").write_text(
+        "-- @disabled: true\nSELECT id FROM src;\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mid2.sql").write_text(
+        "-- @disabled: true\nSELECT id FROM mid1;\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "leaf.sql").write_text(
+        "SELECT id FROM mid2;\n", encoding="utf-8"
+    )
+    result = unwind.load(tmp_path).run(engine="duckdb")
+    by_name = {m.name: m.row_count for m in result.executed}
+    assert by_name == {"src": 2, "mid1": 2, "mid2": 2, "leaf": 2}
+
+
+def test_run_disabled_python_model_is_not_called(tmp_path: Path) -> None:
+    """Python model with DISABLED = True must not have its function invoked."""
+    (tmp_path / "raw_seed.sql").write_text(
+        "SELECT * FROM (VALUES (1, 'a')) AS t(id, label);",
+        encoding="utf-8",
+    )
+    (tmp_path / "py_model.py").write_text(
+        "DISABLED = True\n"
+        "DEPENDS_ON = ('raw_seed',)\n"
+        "def model(context):\n"
+        "    raise AssertionError('disabled python model must not run')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "leaf.sql").write_text(
+        "SELECT id FROM py_model;\n", encoding="utf-8"
+    )
+    result = unwind.load(tmp_path).run(engine="duckdb")
+    by_name = {m.name: m.row_count for m in result.executed}
+    assert by_name == {"raw_seed": 1, "py_model": 1, "leaf": 1}
+
+
+def test_run_disabled_leaf_without_parents_is_skipped(tmp_path: Path) -> None:
+    """Disabling a parent-less leaf leaves nothing materialised; downstream fails clearly."""
+    (tmp_path / "src.sql").write_text(
+        "-- @disabled: true\nSELECT 1 AS id;\n", encoding="utf-8"
+    )
+    (tmp_path / "leaf.sql").write_text(
+        "SELECT id FROM src;\n", encoding="utf-8"
+    )
+    with pytest.raises(RunError, match="leaf"):
+        unwind.load(tmp_path).run(engine="duckdb")

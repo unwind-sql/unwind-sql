@@ -54,20 +54,96 @@ function payloadToFlow(
       group: n.group,
       tags: n.tags,
       rowCount: n.row_count,
+      disabled: n.disabled,
     },
   }));
-  const edges: Edge[] = dag.edges.map((e) => ({
-    id: `${e.from}->${e.to}`,
-    source: e.from,
-    target: e.to,
-    type: edgeStyle,
-    animated: false,
-    style: { stroke: "#94a3b8", strokeWidth: 1.4 },
-  }));
+
+  const disabledIds = new Set(dag.nodes.filter((n) => n.disabled).map((n) => n.id));
+
+  // Parents/children indexed by id so we can synthesise Blender-style bypass
+  // edges for muted nodes.
+  const parentsOf = new Map<string, string[]>();
+  const childrenOf = new Map<string, string[]>();
+  for (const e of dag.edges) {
+    if (!parentsOf.has(e.to)) parentsOf.set(e.to, []);
+    parentsOf.get(e.to)!.push(e.from);
+    if (!childrenOf.has(e.from)) childrenOf.set(e.from, []);
+    childrenOf.get(e.from)!.push(e.to);
+  }
+
+  const realEdges: Edge[] = dag.edges.map((e) => {
+    const muted = disabledIds.has(e.from) || disabledIds.has(e.to);
+    return {
+      id: `${e.from}->${e.to}`,
+      source: e.from,
+      target: e.to,
+      type: edgeStyle,
+      animated: false,
+      style: muted
+        ? { stroke: "#cbd5e1", strokeWidth: 1, strokeDasharray: "4 4" }
+        : { stroke: "#94a3b8", strokeWidth: 1.4 },
+    };
+  });
+
+  // Bypass edges: for each disabled node, connect every (non-disabled) source
+  // we can reach upstream to every (non-disabled) sink we can reach downstream.
+  // Walking through chains of disabled nodes preserves the bypass when the
+  // user mutes several models in a row.
+  function resolveUpstream(name: string, seen: Set<string>): string[] {
+    const out: string[] = [];
+    for (const p of parentsOf.get(name) ?? []) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      if (disabledIds.has(p)) out.push(...resolveUpstream(p, seen));
+      else out.push(p);
+    }
+    return out;
+  }
+  function resolveDownstream(name: string, seen: Set<string>): string[] {
+    const out: string[] = [];
+    for (const c of childrenOf.get(name) ?? []) {
+      if (seen.has(c)) continue;
+      seen.add(c);
+      if (disabledIds.has(c)) out.push(...resolveDownstream(c, seen));
+      else out.push(c);
+    }
+    return out;
+  }
+
+  const bypassEdges: Edge[] = [];
+  const bypassSeen = new Set<string>();
+  for (const id of disabledIds) {
+    const ups = resolveUpstream(id, new Set([id]));
+    const downs = resolveDownstream(id, new Set([id]));
+    for (const u of ups) {
+      for (const d of downs) {
+        const key = `bypass:${u}->${d}`;
+        if (bypassSeen.has(key)) continue;
+        bypassSeen.add(key);
+        bypassEdges.push({
+          id: key,
+          source: u,
+          target: d,
+          type: edgeStyle,
+          animated: false,
+          style: {
+            stroke: "#64748b",
+            strokeWidth: 1.4,
+            strokeDasharray: "2 6",
+          },
+          // Sit visually above the muted real edges so the bypass reads as
+          // the actual data path.
+          zIndex: 1,
+        });
+      }
+    }
+  }
 
   // dagre runs in compound mode when there are groups, which keeps each
   // cluster spatially tight regardless of source/sink rank distance.
-  const laid = layoutDag(memberNodes, edges, dag.groups ?? []);
+  // Only real edges contribute to layout — bypass edges are visual-only.
+  const laid = layoutDag(memberNodes, realEdges, dag.groups ?? []);
+  const edges = [...realEdges, ...bypassEdges];
 
   // Synthesize one container node per cluster from the bounds returned by
   // dagre. Render them behind everything else and make them non-interactive.

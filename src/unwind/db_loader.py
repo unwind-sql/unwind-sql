@@ -124,7 +124,9 @@ def load_from_db(  # noqa: PLR0912
             raise ProjectLoadError(
                 f"duplicate model name {name!r} in {qualified!r}"
             )
-        group, tags, materialized, location = _parse_metadata(raw_sql, source=origin)
+        group, tags, materialized, location, disabled = _parse_metadata(
+            raw_sql, source=origin
+        )
         models[name] = Model(
             name=name,
             path=None,
@@ -134,6 +136,7 @@ def load_from_db(  # noqa: PLR0912
             tags=tags,
             materialized=materialized,
             location=location,
+            disabled=disabled,
         )
 
     if not models:

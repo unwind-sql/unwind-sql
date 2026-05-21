@@ -34,7 +34,7 @@ from sqlglot.optimizer.qualify import qualify
 
 from unwind.errors import UnwindError
 from unwind.project import Project, PythonModel
-from unwind.runner import _quote_ident, materialize_model
+from unwind.runner import _materialize_disabled, _quote_ident, materialize_model
 
 
 class TraceError(UnwindError):
@@ -176,6 +176,10 @@ def _materialize(project: Project, conn: duckdb.DuckDBPyConnection) -> None:
     dag = project.dag()
     for name in dag.execution_order:
         model = project.models[name]
+        if model.disabled:
+            parents = sorted(dag.nodes[name].depends_on_models)
+            _materialize_disabled(conn, name, parents, debug=False)
+            continue
         materialize_model(
             conn,
             model,

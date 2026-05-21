@@ -32,7 +32,7 @@ from sqlglot.lineage import lineage as sqlglot_lineage
 
 from unwind.errors import UnwindError
 from unwind.project import Project, PythonModel
-from unwind.runner import _quote_ident, materialize_model
+from unwind.runner import _materialize_disabled, _quote_ident, materialize_model
 from unwind.trace import _column_types, _qualify
 
 
@@ -112,10 +112,16 @@ def get_column_impact(
     rendered = project if _all_rendered(project) else project.render()
     conn = duckdb.connect(":memory:")
     try:
-        for name in rendered.dag().execution_order:
+        dag = rendered.dag()
+        for name in dag.execution_order:
+            mdl = rendered.models[name]
+            if mdl.disabled:
+                parents = sorted(dag.nodes[name].depends_on_models)
+                _materialize_disabled(conn, name, parents, debug=False)
+                continue
             materialize_model(
                 conn,
-                rendered.models[name],
+                mdl,
                 variables={},
                 project_root=rendered.root,
                 respect_external=False,

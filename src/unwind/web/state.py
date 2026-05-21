@@ -16,7 +16,7 @@ from fastapi import Depends, Request
 
 from unwind.dag import DAG
 from unwind.project import Project, PythonModel
-from unwind.runner import materialize_model
+from unwind.runner import _materialize_disabled, materialize_model
 
 if TYPE_CHECKING:
     # `pydantic_ai` is an optional extra, so types from `unwind.investigator`
@@ -47,9 +47,14 @@ def build_state(project: Project, *, investigator: Investigator | None = None) -
     dag = rendered.dag()
     conn = duckdb.connect(":memory:")
     for name in dag.execution_order:
+        model = rendered.models[name]
+        if model.disabled:
+            parents = sorted(dag.nodes[name].depends_on_models)
+            _materialize_disabled(conn, name, parents, debug=False)
+            continue
         materialize_model(
             conn,
-            rendered.models[name],
+            model,
             variables={},
             project_root=rendered.root,
             # The web UI doesn't write parquets — coerce external models into

@@ -68,6 +68,7 @@ def render_project(
             materialized=model.materialized,
             location=model.location,
             rendered_location=rendered_location,
+            disabled=model.disabled,
         )
 
     return Project(

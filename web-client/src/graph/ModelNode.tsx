@@ -15,6 +15,7 @@ export interface ModelNodeData extends Record<string, unknown> {
   rowCount: number | null;
   relation?: NodeRelation;
   impactRole?: ImpactRole | null;
+  disabled?: boolean;
 }
 
 const LANGUAGE_BADGE: Record<ModelLanguage, string> = {
@@ -104,28 +105,41 @@ export function ModelNode({ data, selected }: NodeProps) {
   // Priority: explicit selection > impact role > relation halo > default.
   const impact = !selected ? impactStyle(d.impactRole ?? null) : null;
   const relStyle = !selected && !impact ? relationStyle(d.relation ?? null) : null;
+  const disabled = d.disabled === true;
   return (
     <div
       style={{
         display: "flex",
         alignItems: "stretch",
-        background: palette.fill,
-        color: palette.text,
+        background: disabled ? "#f1f5f9" : palette.fill,
+        color: disabled ? "#94a3b8" : palette.text,
         border: selected
           ? `3px solid #1a3a99`
-          : (impact?.border ?? relStyle?.border ?? `1.5px solid ${palette.border}`),
+          : disabled
+            ? "1.5px dashed #94a3b8"
+            : (impact?.border ?? relStyle?.border ?? `1.5px solid ${palette.border}`),
         borderRadius: 6,
         boxShadow: selected
           ? "0 0 0 4px rgba(76, 110, 245, 0.45), 0 0 18px 4px rgba(76, 110, 245, 0.35)"
-          : (impact?.shadow ?? relStyle?.shadow ?? "0 1px 2px rgba(0, 0, 0, 0.04)"),
+          : disabled
+            ? "none"
+            : (impact?.shadow ?? relStyle?.shadow ?? "0 1px 2px rgba(0, 0, 0, 0.04)"),
         fontSize: 12,
         width: "100%",
         height: "100%",
         overflow: "hidden",
+        opacity: disabled ? 0.7 : 1,
         transition: "box-shadow 120ms ease, border-color 120ms ease",
       }}
+      title={disabled ? "disabled (bypassed)" : undefined}
     >
-      <div style={{ width: 4, background: palette.border, flex: "0 0 auto" }} />
+      <div
+        style={{
+          width: 4,
+          background: disabled ? "#cbd5e1" : palette.border,
+          flex: "0 0 auto",
+        }}
+      />
       <div
         style={{
           padding: "6px 10px",
@@ -152,10 +166,30 @@ export function ModelNode({ data, selected }: NodeProps) {
               textOverflow: "ellipsis",
               flex: 1,
               minWidth: 0,
+              textDecoration: disabled ? "line-through" : "none",
             }}
           >
             {d.label}
           </div>
+          {disabled ? (
+            <span
+              title="disabled (bypassed)"
+              style={{
+                flex: "0 0 auto",
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                color: "#64748b",
+                background: "#ffffff",
+                border: "1px dashed #94a3b8",
+                borderRadius: 3,
+                padding: "0 4px",
+                lineHeight: "14px",
+              }}
+            >
+              ⏸ MUTE
+            </span>
+          ) : null}
           <span
             title={d.language === "python" ? "Python model" : "SQL model"}
             style={{

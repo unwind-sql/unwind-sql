@@ -21,12 +21,16 @@ before the first non-comment line:
     -- @tags: <a>, <b>, <c>    # free-form labels (filtering only)
     -- @materialized: <kind>   # 'table' (default) | 'view' | 'external'
     -- @location: <path>       # required + only valid with `external`
+    -- @disabled: true|false   # Blender-style mute: skip the model body and
+                               # alias its name to the first parent (default false)
 
 Python model files declare the same metadata via module-level constants:
-`GROUP`, `TAGS`, `MATERIALIZED`, `DEPENDS_ON`. `MATERIALIZED` must be `"table"`
-(default) or `"view"`; `"external"` is not supported for Python models in this
-version. `DEPENDS_ON` is the explicit tuple of upstream model names (Python
-models have no SQL to parse).
+`GROUP`, `TAGS`, `MATERIALIZED`, `DEPENDS_ON`, `DISABLED`. `MATERIALIZED` must
+be `"table"` (default) or `"view"`; `"external"` is not supported for Python
+models in this version. `DEPENDS_ON` is the explicit tuple of upstream model
+names (Python models have no SQL to parse). `DISABLED` is a bool (default
+False); when True the function is not called and the model name is aliased to
+the first parent at runtime.
 
 The loader prepends the project root to `sys.path` so any model file can
 `from helpers import ...` without ceremony.
@@ -108,7 +112,9 @@ def _load_sql_models(
             previous = models[name].path
             raise ProjectLoadError(f"duplicate model name {name!r}: {previous} and {sql_path}")
         raw_sql = sql_path.read_text(encoding="utf-8")
-        group, tags, materialized, location = _parse_metadata(raw_sql, source=sql_path)
+        group, tags, materialized, location, disabled = _parse_metadata(
+            raw_sql, source=sql_path
+        )
         models[name] = Model(
             name=name,
             path=sql_path,
@@ -118,6 +124,7 @@ def _load_sql_models(
             tags=tags,
             materialized=materialized,
             location=location,
+            disabled=disabled,
         )
 
 
@@ -140,7 +147,9 @@ def _load_python_models(
         if name in models:
             previous = models[name].path
             raise ProjectLoadError(f"duplicate model name {name!r}: {previous} and {py_path}")
-        group, tags, materialized, depends_on = _parse_python_metadata(module, source=py_path)
+        group, tags, materialized, depends_on, disabled = _parse_python_metadata(
+            module, source=py_path
+        )
         models[name] = PythonModel(
             name=name,
             func=func,
@@ -150,6 +159,7 @@ def _load_python_models(
             group=group,
             tags=tags,
             materialized=materialized,
+            disabled=disabled,
         )
 
 
@@ -216,16 +226,17 @@ def _import_user_file(py_path: Path, root: Path) -> ModuleType:
 
 def _parse_python_metadata(
     module: ModuleType, *, source: Path
-) -> tuple[str | None, tuple[str, ...], str, tuple[str, ...]]:
+) -> tuple[str | None, tuple[str, ...], str, tuple[str, ...], bool]:
     """Read module-level directive constants from a Python model.
 
-    Recognised constants: `GROUP`, `TAGS`, `MATERIALIZED`, `DEPENDS_ON`.
+    Recognised constants: `GROUP`, `TAGS`, `MATERIALIZED`, `DEPENDS_ON`, `DISABLED`.
     """
     group = _read_str_or_none(module, "GROUP", source=source)
     tags = _read_str_tuple(module, "TAGS", source=source)
     materialized = _read_materialized(module, source=source)
     depends_on = _read_str_tuple(module, "DEPENDS_ON", source=source)
-    return group, tags, materialized, depends_on
+    disabled = _read_bool(module, "DISABLED", source=source)
+    return group, tags, materialized, depends_on, disabled
 
 
 def _read_str_or_none(module: ModuleType, attr: str, *, source: Path) -> str | None:
@@ -254,6 +265,15 @@ def _read_str_tuple(module: ModuleType, attr: str, *, source: Path) -> tuple[str
     return items
 
 
+def _read_bool(module: ModuleType, attr: str, *, source: Path) -> bool:
+    value = getattr(module, attr, False)
+    if not isinstance(value, bool):
+        raise ProjectLoadError(
+            f"{attr} in {source} must be a bool, got {value!r}"
+        )
+    return value
+
+
 def _read_materialized(module: ModuleType, *, source: Path) -> str:
     value = getattr(module, "MATERIALIZED", "table")
     if not isinstance(value, str) or value not in _PY_MATERIALIZED_VALUES:
@@ -273,17 +293,18 @@ def _is_iterable(value: Any) -> bool:
 
 def _parse_metadata(  # noqa: PLR0912
     raw_sql: str, *, source: str | Path
-) -> tuple[str | None, tuple[str, ...], str, str | None]:
+) -> tuple[str | None, tuple[str, ...], str, str | None, bool]:
     """Read leading `-- @key: value` directives.
 
-    Recognised: `@group`, `@tags`, `@materialized`, `@location`. Plain
-    comments and unknown directives are silently skipped. Returns
-    `(group, tags, materialized, location)`.
+    Recognised: `@group`, `@tags`, `@materialized`, `@location`, `@disabled`.
+    Plain comments and unknown directives are silently skipped. Returns
+    `(group, tags, materialized, location, disabled)`.
     """
     group: str | None = None
     tags: tuple[str, ...] = ()
     materialized: str | None = None
     location: str | None = None
+    disabled: bool | None = None
     for line in raw_sql.splitlines():
         stripped = line.strip()
         if not stripped:
@@ -319,6 +340,19 @@ def _parse_metadata(  # noqa: PLR0912
             if not value:
                 raise ProjectLoadError(f"empty '@location' value in {source}")
             location = value
+        elif key == "disabled":
+            if disabled is not None:
+                raise ProjectLoadError(f"duplicate '@disabled' directive in {source}")
+            lowered = value.lower()
+            if lowered in ("true", "1", "yes"):
+                disabled = True
+            elif lowered in ("false", "0", "no", ""):
+                disabled = False
+            else:
+                raise ProjectLoadError(
+                    f"invalid '@disabled' value {value!r} in {source}; "
+                    f"must be 'true' or 'false'"
+                )
 
     if materialized == "external" and location is None:
         raise ProjectLoadError(
@@ -329,4 +363,4 @@ def _parse_metadata(  # noqa: PLR0912
             f"'@location' is only valid with '@materialized: external' in {source}"
         )
 
-    return group, tags, materialized or "table", location
+    return group, tags, materialized or "table", location, bool(disabled)

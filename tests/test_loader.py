@@ -17,6 +17,7 @@ EXAMPLE_MODELS = {
     "ref_carrier_rates",
     "ref_local_taxes",
     "int_order_base",
+    "int_orders_dedup",
     "int_transport_costs",
     "int_tax_costs",
     "int_net_margin_per_order",
@@ -190,6 +191,67 @@ def test_load_rejects_duplicate_location(tmp_path: Path) -> None:
         unwind.load(tmp_path)
 
 
+def test_load_default_disabled_is_false(tmp_path: Path) -> None:
+    (tmp_path / "stg_x.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    model = unwind.load(tmp_path).models["stg_x"]
+    assert model.disabled is False
+
+
+def test_load_parses_disabled_true(tmp_path: Path) -> None:
+    (tmp_path / "stg_x.sql").write_text(
+        "-- @disabled: true\nSELECT 1;\n", encoding="utf-8"
+    )
+    assert unwind.load(tmp_path).models["stg_x"].disabled is True
+
+
+def test_load_parses_disabled_false(tmp_path: Path) -> None:
+    (tmp_path / "stg_x.sql").write_text(
+        "-- @disabled: false\nSELECT 1;\n", encoding="utf-8"
+    )
+    assert unwind.load(tmp_path).models["stg_x"].disabled is False
+
+
+def test_load_rejects_invalid_disabled_value(tmp_path: Path) -> None:
+    (tmp_path / "stg_x.sql").write_text(
+        "-- @disabled: maybe\nSELECT 1;\n", encoding="utf-8"
+    )
+    with pytest.raises(ProjectLoadError, match="invalid '@disabled'"):
+        unwind.load(tmp_path)
+
+
+def test_load_rejects_duplicate_disabled(tmp_path: Path) -> None:
+    (tmp_path / "stg_x.sql").write_text(
+        "-- @disabled: true\n-- @disabled: false\nSELECT 1;\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ProjectLoadError, match="duplicate '@disabled'"):
+        unwind.load(tmp_path)
+
+
+def test_load_python_model_disabled(tmp_path: Path) -> None:
+    (tmp_path / "raw_seed.sql").write_text("SELECT 1 AS id;\n", encoding="utf-8")
+    (tmp_path / "py_model.py").write_text(
+        "DISABLED = True\n"
+        "DEPENDS_ON = ('raw_seed',)\n"
+        "def model(context):\n"
+        "    raise AssertionError('should not run when disabled')\n",
+        encoding="utf-8",
+    )
+    project = unwind.load(tmp_path)
+    assert project.models["py_model"].disabled is True
+
+
+def test_load_python_model_rejects_non_bool_disabled(tmp_path: Path) -> None:
+    (tmp_path / "py_model.py").write_text(
+        "DISABLED = 'yes'\n"
+        "def model(context):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ProjectLoadError, match=r"DISABLED .* must be a bool"):
+        unwind.load(tmp_path)
+
+
 def test_load_example_project_groups(example_models_dir: Path) -> None:
     project = unwind.load(example_models_dir)
     by_group: dict[str | None, set[str]] = {}
@@ -201,6 +263,7 @@ def test_load_example_project_groups(example_models_dir: Path) -> None:
         "ref_carrier_rates",
         "ref_local_taxes",
         "int_order_base",
+        "int_orders_dedup",
         "int_transport_costs",
         "int_tax_costs",
     }

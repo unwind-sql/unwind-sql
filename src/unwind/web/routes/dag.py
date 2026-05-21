@@ -39,6 +39,7 @@ def _dag_payload(state: AppState) -> dict[str, Any]:
                 "row_count": _count_rows(state, name),
                 "materialized": model.materialized,
                 "location": model.rendered_location,
+                "disabled": model.disabled,
             }
         )
         if model.group is not None:

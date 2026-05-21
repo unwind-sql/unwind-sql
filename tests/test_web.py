@@ -93,6 +93,29 @@ def test_dag_endpoint_lists_nodes_and_edges(client: TestClient) -> None:
     assert ("raw_orders", "int_order_base") in edges
 
 
+def test_dag_endpoint_exposes_disabled_flag(tmp_path: Path) -> None:
+    """Each /api/dag node exposes a `disabled` bool reflecting the model's @disabled directive."""
+    (tmp_path / "src.sql").write_text(
+        "SELECT * FROM (VALUES (1), (2)) AS t(id);",
+        encoding="utf-8",
+    )
+    (tmp_path / "muted.sql").write_text(
+        "-- @disabled: true\nSELECT id FROM src;\n", encoding="utf-8"
+    )
+    (tmp_path / "leaf.sql").write_text(
+        "SELECT id FROM muted;\n", encoding="utf-8"
+    )
+    project = unwind.load(tmp_path)
+    app = build_app(project)
+    with TestClient(app) as c:
+        payload = c.get("/api/dag").json()
+
+    by_id = {n["id"]: n for n in payload["nodes"]}
+    assert by_id["muted"]["disabled"] is True
+    assert by_id["src"]["disabled"] is False
+    assert by_id["leaf"]["disabled"] is False
+
+
 def test_dag_endpoint_exposes_groups(client: TestClient) -> None:
     payload = client.get("/api/dag").json()
 
@@ -107,7 +130,7 @@ def test_dag_endpoint_exposes_groups(client: TestClient) -> None:
     assert set(groups) == {"costs", "margin"}
     assert "raw_orders" in groups["costs"]
     assert "fct_warehouse_profitability" in groups["margin"]
-    assert len(groups["costs"]) == 7
+    assert len(groups["costs"]) == 8
     assert len(groups["margin"]) == 3
 
 

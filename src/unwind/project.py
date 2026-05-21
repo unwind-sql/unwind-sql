@@ -56,6 +56,7 @@ class Model:
     materialized: str = "table"
     location: str | None = None
     rendered_location: str | None = None
+    disabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +105,7 @@ class PythonModel:
     # always `None` for Python models in the current implementation.
     location: str | None = None
     rendered_location: str | None = None
+    disabled: bool = False
 
 
 ModelOrPython = Model | PythonModel

@@ -24,11 +24,13 @@ def test_table_lineage_for_int_tax_costs(example_models_dir: Path) -> None:
             "ref_carrier_rates",
             "ref_local_taxes",
             "int_order_base",
+            "int_orders_dedup",
             "int_transport_costs",
             "int_tax_costs",
         }
     )
-    assert ("int_order_base", "int_transport_costs") in lineage.edges
+    assert ("int_order_base", "int_orders_dedup") in lineage.edges
+    assert ("int_orders_dedup", "int_transport_costs") in lineage.edges
     assert ("int_transport_costs", "int_tax_costs") in lineage.edges
     assert ("raw_orders", "int_order_base") in lineage.edges
     # Downstream models should not appear
