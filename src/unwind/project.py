@@ -1,0 +1,254 @@
+"""Project, Model, and PythonModel: the core data classes."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import duckdb
+
+if TYPE_CHECKING:
+    # `pydantic_ai` is an optional extra and the unwind.{dag,impact,
+    # investigator,lineage,runner,trace} modules all import from this file,
+    # so these imports live behind TYPE_CHECKING to avoid the circular load.
+    from pydantic_ai.models import Model as AIModel
+
+    from unwind.dag import DAG
+    from unwind.impact import ColumnImpact
+    from unwind.investigator import Investigator
+    from unwind.lineage import ColumnRef, TableLineage
+    from unwind.runner import RunResult
+    from unwind.trace import TraceResult
+
+
+@dataclass(frozen=True, slots=True)
+class Model:
+    """A single SQL model: a named SQL statement, before and after Jinja rendering.
+
+    `rendered_sql` is `None` until the project has been rendered with concrete
+    `vars`. `group`, `tags`, and `materialized` are populated by the loader from
+    leading `-- @group:` / `-- @tags:` / `-- @materialized:` directives.
+
+    `materialized` is one of:
+        - `"table"` (default): `CREATE OR REPLACE TABLE ... AS (sql)`
+        - `"view"`: `CREATE OR REPLACE VIEW ... AS (sql)`
+        - `"external"`: `COPY (sql) TO <location> (FORMAT PARQUET)`, then a
+          view is created over the resulting parquet so downstream models and
+          the web UI keep working.
+
+    `location` (raw) and `rendered_location` (post-Jinja) carry the output
+    path for `external` models and are `None` otherwise.
+
+    `origin` is a human-readable identifier of where the model was loaded from
+    (e.g. `"file:/abs/path.sql"` or `"db:schema.table#name"`). `path` is set
+    only for models loaded from disk.
+    """
+
+    name: str
+    raw_sql: str
+    origin: str
+    path: Path | None = None
+    rendered_sql: str | None = None
+    group: str | None = None
+    tags: tuple[str, ...] = ()
+    materialized: str = "table"
+    location: str | None = None
+    rendered_location: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelContext:
+    """Runtime handle passed to a Python model's `model(context)` function.
+
+    `duckdb` is the live DuckDB connection used by the runner. Upstream models
+    listed in `depends_on` have already been materialized when the function
+    runs, so `context.duckdb.execute("SELECT * FROM fct_x").arrow()` is safe.
+    `variables` are the Jinja vars passed to `Project.run(vars=...)`.
+    """
+
+    duckdb: duckdb.DuckDBPyConnection
+    variables: Mapping[str, Any]
+    project_root: Path | None
+
+
+@dataclass(frozen=True, slots=True)
+class PythonModel:
+    """A Python-backed model: a function that returns a relation.
+
+    The function signature is `model(context: ModelContext) -> object`. The
+    return value can be a `pyarrow.Table`, `pandas.DataFrame`, a
+    `duckdb.DuckDBPyRelation`, a raw SQL string (wrapped as
+    `CREATE TABLE name AS (...)`), or `None` if the function performed its
+    own side-effects via `context.duckdb`.
+
+    `depends_on` is the explicit list of upstream model names (Python models
+    have no SQL, so dependencies cannot be inferred from an AST). The runner
+    materializes those upstream models before calling `func`.
+
+    Supported `materialized` values: `"table"` (default) and `"view"`. A
+    `"view"` materialization registers the returned relation directly as a
+    DuckDB view without copying — useful for large Arrow tables.
+    """
+
+    name: str
+    func: Callable[[ModelContext], object]
+    origin: str
+    path: Path | None = None
+    depends_on: tuple[str, ...] = ()
+    group: str | None = None
+    tags: tuple[str, ...] = ()
+    materialized: str = "table"
+    # Kept for shape-parity with `Model` so callers can read these uniformly;
+    # always `None` for Python models in the current implementation.
+    location: str | None = None
+    rendered_location: str | None = None
+
+
+ModelOrPython = Model | PythonModel
+
+
+@dataclass(slots=True)
+class Project:
+    """A loaded set of models (SQL or Python), ready to be rendered, planned, and run."""
+
+    models: dict[str, ModelOrPython] = field(default_factory=dict)
+    macros: dict[str, str] = field(default_factory=dict)
+    root: Path | None = None
+
+    def render(self, variables: Mapping[str, object] | None = None) -> Project:
+        """Return a new `Project` with every SQL model rendered."""
+        from unwind.renderer import render_project  # noqa: PLC0415
+
+        return render_project(self, variables=variables)
+
+    def dag(self) -> DAG:
+        """Build the dependency graph from rendered models."""
+        from unwind.dag import build_dag  # noqa: PLC0415
+
+        return build_dag(self)
+
+    def get_table_lineage(
+        self, target: str, *, vars: Mapping[str, object] | None = None
+    ) -> TableLineage:
+        """Return the table-level lineage subgraph rooted at `target`."""
+        from unwind.lineage import get_table_lineage  # noqa: PLC0415
+
+        return get_table_lineage(self._ensure_rendered(vars), target)
+
+    def get_column_lineage(
+        self,
+        target: str,
+        *,
+        column: str,
+        vars: Mapping[str, object] | None = None,
+    ) -> ColumnRef:
+        """Return the column-level lineage tree for `target.column`.
+
+        Raises if `target` is a Python model: column lineage requires an
+        SQL AST that Python models don't expose.
+        """
+        from unwind.lineage import get_column_lineage  # noqa: PLC0415
+
+        return get_column_lineage(self._ensure_rendered(vars), target, column)
+
+    def get_column_impact(
+        self,
+        model: str,
+        *,
+        column: str,
+        vars: Mapping[str, object] | None = None,
+    ) -> ColumnImpact:
+        """Return the transitive downstream impact of `model.column`.
+
+        Walks the DAG forward and reports every column that would need
+        attention if `column` were renamed or retyped. Symmetric to
+        `get_column_lineage` but in the opposite direction.
+        """
+        from unwind.impact import get_column_impact  # noqa: PLC0415
+
+        return get_column_impact(self._ensure_rendered(vars), model, column)
+
+    def _ensure_rendered(self, variables: Mapping[str, object] | None) -> Project:
+        if all(
+            isinstance(m, PythonModel) or m.rendered_sql is not None
+            for m in self.models.values()
+        ):
+            return self
+        return self.render(variables)
+
+    def trace_value(
+        self,
+        *,
+        model: str,
+        column: str,
+        where: Mapping[str, object],
+        depth: int | None = None,
+        max_values: int | None = 5,
+        vars: Mapping[str, object] | None = None,
+    ) -> TraceResult:
+        """Trace `(model.column, where)` back to the source values that contributed."""
+        from unwind.trace import trace_value  # noqa: PLC0415
+
+        return trace_value(
+            self._ensure_rendered(vars),
+            model=model,
+            column=column,
+            where=where,
+            depth=depth,
+            max_values=max_values,
+        )
+
+    def get_investigator(
+        self,
+        *,
+        llm_provider: str = "openai",
+        model: str | AIModel | None = None,
+        language: str = "en",
+    ) -> Investigator:
+        """Return an LLM `Investigator` that turns a `TraceResult` into prose."""
+        from unwind.investigator import get_investigator  # noqa: PLC0415
+
+        return get_investigator(llm_provider=llm_provider, model=model, language=language)
+
+    def show(
+        self,
+        *,
+        vars: Mapping[str, object] | None = None,
+        host: str = "127.0.0.1",
+        port: int = 8765,
+        open_browser: bool = True,
+    ) -> None:
+        """Launch a web UI to navigate the DAG and column lineage. Blocks until Ctrl+C."""
+        from unwind.web import serve  # noqa: PLC0415
+
+        serve(
+            self._ensure_rendered(vars),
+            host=host,
+            port=port,
+            open_browser=open_browser,
+        )
+
+    def run(
+        self,
+        *,
+        engine: str = "duckdb",
+        vars: Mapping[str, object] | None = None,
+        target: str | None = None,
+        database: str | Path = ":memory:",
+        debug: bool = False,
+    ) -> RunResult:
+        """Render, plan, and execute the project on the chosen engine."""
+        if engine != "duckdb":
+            raise ValueError(f"unsupported engine: {engine!r} (only 'duckdb' is supported)")
+
+        from unwind.runner import run_project  # noqa: PLC0415
+
+        return run_project(
+            self,
+            variables=vars,
+            target=target,
+            database=database,
+            debug=debug,
+        )
