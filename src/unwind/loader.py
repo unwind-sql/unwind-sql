@@ -291,7 +291,7 @@ def _is_iterable(value: Any) -> bool:
     return True
 
 
-def _parse_metadata(  # noqa: PLR0912
+def _parse_metadata(  # noqa: PLR0912, PLR0915
     raw_sql: str, *, source: str | Path
 ) -> tuple[str | None, tuple[str, ...], str, str | None, bool]:
     """Read leading `-- @key: value` directives.
