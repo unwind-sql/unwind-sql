@@ -3074,10 +3074,14 @@ dependencies = [
 all = [
     { name = "fastapi" },
     { name = "pydantic-ai" },
+    { name = "rich" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 llm = [
     { name = "pydantic-ai" },
+]
+progress = [
+    { name = "rich" },
 ]
 web = [
     { name = "fastapi" },
@@ -3092,6 +3096,7 @@ dev = [
     { name = "pydantic-ai" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "rich" },
     { name = "ruff" },
     { name = "ty" },
     { name = "uvicorn", extra = ["standard"] },
@@ -3103,12 +3108,14 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.115.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "pydantic-ai", marker = "extra == 'llm'", specifier = ">=0.0.20" },
+    { name = "rich", marker = "extra == 'progress'", specifier = ">=13.0" },
     { name = "sqlglot", specifier = ">=30.6.0" },
     { name = "unwind-sql", extras = ["llm"], marker = "extra == 'all'" },
+    { name = "unwind-sql", extras = ["progress"], marker = "extra == 'all'" },
     { name = "unwind-sql", extras = ["web"], marker = "extra == 'all'" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.32.0" },
 ]
-provides-extras = ["llm", "web", "all"]
+provides-extras = ["llm", "web", "progress", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3118,6 +3125,7 @@ dev = [
     { name = "pydantic-ai", specifier = ">=0.0.20" },
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "pytest-cov", specifier = ">=5.0.0" },
+    { name = "rich", specifier = ">=13.0" },
     { name = "ruff", specifier = ">=0.8.0" },
     { name = "ty", specifier = ">=0.0.1a5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },

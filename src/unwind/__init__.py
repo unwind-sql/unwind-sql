@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 from unwind.__about__ import __version__
+from unwind._progress import ProgressCallback, RunEvent
 from unwind.dag import DAG, DAGError, Node
 from unwind.db_loader import load_from_rows
 from unwind.errors import ProjectLoadError, TemplateRenderError, UnwindError
@@ -38,10 +39,12 @@ __all__ = [
     "Model",
     "ModelContext",
     "Node",
+    "ProgressCallback",
     "Project",
     "ProjectLoadError",
     "PythonModel",
     "RunError",
+    "RunEvent",
     "RunResult",
     "TableLineage",
     "TemplateRenderError",

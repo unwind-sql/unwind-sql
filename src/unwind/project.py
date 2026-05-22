@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     # so these imports live behind TYPE_CHECKING to avoid the circular load.
     from pydantic_ai.models import Model as AIModel
 
+    from unwind._progress import ProgressCallback
     from unwind.dag import DAG
     from unwind.impact import ColumnImpact
     from unwind.investigator import Investigator
@@ -273,6 +274,8 @@ class Project:
         database: str | Path = ":memory:",
         connection: duckdb.DuckDBPyConnection | None = None,
         debug: bool = False,
+        workers: int = 1,
+        on_event: ProgressCallback | None = None,
     ) -> RunResult:
         """Render, plan, and execute the project on DuckDB.
 
@@ -281,6 +284,17 @@ class Project:
         given, `database` is ignored and the connection is left open — the
         caller owns it. Otherwise Unwind opens, uses, and closes its own
         connection to `database`.
+
+        Pass `workers=N` (default `1`) to materialize independent models in
+        parallel via a `ThreadPoolExecutor` with one `conn.cursor()` per
+        worker. DuckDB serializes DDL at the engine layer; Python-model code
+        runs in worker threads. With `workers=1` execution stays on the
+        calling thread — bit-for-bit identical to pre-parallel behaviour.
+
+        Progress: when `on_event` is `None`, the runner installs a default
+        live progress UI iff stderr is a TTY, `rich` is importable, and
+        `UNWIND_NO_PROGRESS` is unset. Pass a custom `on_event` callback to
+        observe events without rendering, or `lambda _: None` to fully mute.
         """
         from unwind.runner import run_project  # noqa: PLC0415
 
@@ -291,4 +305,6 @@ class Project:
             database=database,
             connection=connection,
             debug=debug,
+            workers=workers,
+            on_event=on_event,
         )
