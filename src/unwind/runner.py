@@ -306,24 +306,22 @@ def _materialize_python(
         conn.execute(f"CREATE OR REPLACE {kind} {_quote_ident(name)} AS ({body})")
         return f"python-{kind.lower()}"
 
+    # A VIEW keeps a reference to the registered Arrow/relation, so we must
+    # leave the registration in place. A TABLE has already copied the data,
+    # but we still skip the unregister: DuckDB's relation cache is cheap, and
+    # the next model load registers under its own `__py_src_*` name anyway.
     tmp_name = f"__py_src_{name}"
     conn.register(tmp_name, result)
-    try:
-        if view_only or model.materialized == "view":
-            conn.execute(
-                f"CREATE OR REPLACE VIEW {_quote_ident(name)} AS "
-                f"SELECT * FROM {_quote_ident(tmp_name)}"
-            )
-        else:
-            conn.execute(
-                f"CREATE OR REPLACE TABLE {_quote_ident(name)} AS "
-                f"SELECT * FROM {_quote_ident(tmp_name)}"
-            )
-    finally:
-        # A VIEW keeps a reference to the registered Arrow/relation; a TABLE
-        # has already copied the data so we can unregister. Be conservative
-        # and keep it registered either way — DuckDB's relation cache is cheap.
-        pass
+    if view_only or model.materialized == "view":
+        conn.execute(
+            f"CREATE OR REPLACE VIEW {_quote_ident(name)} AS "
+            f"SELECT * FROM {_quote_ident(tmp_name)}"
+        )
+    else:
+        conn.execute(
+            f"CREATE OR REPLACE TABLE {_quote_ident(name)} AS "
+            f"SELECT * FROM {_quote_ident(tmp_name)}"
+        )
     return f"python-{model.materialized}"
 
 

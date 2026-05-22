@@ -101,8 +101,11 @@ class PythonModel:
     group: str | None = None
     tags: tuple[str, ...] = ()
     materialized: str = "table"
-    # Kept for shape-parity with `Model` so callers can read these uniformly;
-    # always `None` for Python models in the current implementation.
+    # `location`/`rendered_location` exist solely to give `ModelOrPython` a
+    # union-wide attribute set — consumers can read `m.rendered_location` on
+    # any model without isinstance branching, and `ty`'s possibly-missing-
+    # attribute checks stay clean. Always `None` for Python models: the
+    # `external` materialization is SQL-only.
     location: str | None = None
     rendered_location: str | None = None
     disabled: bool = False
@@ -172,18 +175,24 @@ class Project:
         column: str,
         vars: Mapping[str, object] | None = None,
         connection: duckdb.DuckDBPyConnection | None = None,
+        qualified_sources: dict[str, str] | None = None,
     ) -> ColumnImpact:
         """Return the transitive downstream impact of `model.column`.
 
         Walks the DAG forward and reports every column that would need
         attention if `column` were renamed or retyped. Symmetric to
         `get_column_lineage` but in the opposite direction. Pass `connection=`
-        to reuse a DuckDB connection that already holds the materialized DAG.
+        to reuse a DuckDB connection that already holds the materialized DAG;
+        pass `qualified_sources=` to skip the per-call sqlglot qualify pass.
         """
         from unwind.impact import get_column_impact  # noqa: PLC0415
 
         return get_column_impact(
-            self._ensure_rendered(vars), model, column, connection=connection
+            self._ensure_rendered(vars),
+            model,
+            column,
+            connection=connection,
+            qualified_sources=qualified_sources,
         )
 
     def _ensure_rendered(self, variables: Mapping[str, object] | None) -> Project:
@@ -204,11 +213,14 @@ class Project:
         max_values: int | None = 5,
         vars: Mapping[str, object] | None = None,
         connection: duckdb.DuckDBPyConnection | None = None,
+        qualified_sources: dict[str, str] | None = None,
     ) -> TraceResult:
         """Trace `(model.column, where)` back to the source values that contributed.
 
         Pass `connection=` to reuse a DuckDB connection that already holds the
         materialized DAG; this skips the per-call materialization pass.
+        Pass `qualified_sources=` (cf. `unwind.lineage.compute_qualified_sources`)
+        to also skip the per-call sqlglot qualify pass.
         """
         from unwind.trace import trace_value  # noqa: PLC0415
 
@@ -220,6 +232,7 @@ class Project:
             depth=depth,
             max_values=max_values,
             connection=connection,
+            qualified_sources=qualified_sources,
         )
 
     def get_investigator(

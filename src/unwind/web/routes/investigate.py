@@ -58,6 +58,10 @@ def _sse(event: str, data: Any) -> str:
 async def _generate(req: InvestigateRequest, state: AppState) -> AsyncIterator[str]:
     try:
         yield _sse("status", {"phase": "tracing"})
+        # Reuse the bootstrap connection + qualified-SQL cache (same trust
+        # model as /api/cell: single-user UI, single uvicorn worker).
+        # Skips a fresh in-memory materialization (~the cost of a full DAG
+        # run) and a sqlglot parse+qualify pass per model on every call.
         trace = await asyncio.to_thread(
             trace_value,
             state.project,
@@ -65,6 +69,8 @@ async def _generate(req: InvestigateRequest, state: AppState) -> AsyncIterator[s
             column=req.column,
             where=req.where,
             max_values=req.max_values,
+            connection=state.conn,
+            qualified_sources=state.qualified_sources(),
         )
 
         cache_key = _make_cache_key(req)

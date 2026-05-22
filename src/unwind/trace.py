@@ -90,6 +90,7 @@ def trace_value(
     depth: int | None = None,
     max_values: int | None = DEFAULT_MAX_VALUES,
     connection: duckdb.DuckDBPyConnection | None = None,
+    qualified_sources: dict[str, str] | None = None,
 ) -> TraceResult:
     """Trace a cell `(model.column, where)` to its source values.
 
@@ -97,6 +98,10 @@ def trace_value(
     model materialized (e.g. the web app's bootstrap connection). When given,
     `trace_value` skips its own materialization step entirely — the single
     biggest cost on large DAGs.
+
+    Pass `qualified_sources=` (from `compute_qualified_sources`) to skip the
+    per-call sqlglot parse + `qualify` pass over every SQL model — the next
+    biggest cost once materialization is shared.
     """
     if not where:
         raise TraceError("`where` must contain at least one column/value")
@@ -111,12 +116,18 @@ def trace_value(
     rendered = project if _is_rendered(project) else project.render()
 
     if connection is not None:
-        return _trace_on(rendered, connection, model, column, where, depth, max_values)
+        return _trace_on(
+            rendered, connection, model, column, where, depth, max_values,
+            qualified_sources=qualified_sources,
+        )
 
     conn = duckdb.connect(":memory:")
     try:
         _materialize(rendered, conn)
-        return _trace_on(rendered, conn, model, column, where, depth, max_values)
+        return _trace_on(
+            rendered, conn, model, column, where, depth, max_values,
+            qualified_sources=qualified_sources,
+        )
     finally:
         conn.close()
 
@@ -129,26 +140,10 @@ def _trace_on(
     where: Mapping[str, Any],
     depth: int | None,
     max_values: int | None,
+    *,
+    qualified_sources: dict[str, str] | None,
 ) -> TraceResult:
-    # Build a {table: {col: type}} schema from DuckDB. sqlglot's `qualify`
-    # uses it to expand `t.*` projections into explicit column lists,
-    # which is required for column lineage to walk through models that
-    # rely on `*` (otherwise sqlglot raises "cannot find column X").
-    schema_dict = {name: _column_types(conn, name) for name in rendered.models}
-
-    target_model_obj = rendered.models[model]
-    assert not isinstance(target_model_obj, PythonModel)  # checked above
-    target_sql = target_model_obj.rendered_sql
-    assert target_sql is not None  # _is_rendered or render() guarantees
-    target_sql = _qualify(target_sql, schema_dict)
-
-    sources = {
-        n: _qualify(m.rendered_sql, schema_dict)
-        for n, m in rendered.models.items()
-        if n != model
-        and not isinstance(m, PythonModel)
-        and m.rendered_sql is not None
-    }
+    target_sql, sources = _resolve_qualified(rendered, conn, model, qualified_sources)
     try:
         sg_root = sqlglot_lineage(
             column, sql=target_sql, sources=sources, dialect=DIALECT
@@ -166,6 +161,49 @@ def _trace_on(
         max_values=max_values,
     )
     return TraceResult(model=model, column=column, where=normalized_where, root=root)
+
+
+def _resolve_qualified(
+    rendered: Project,
+    conn: duckdb.DuckDBPyConnection,
+    model: str,
+    qualified_sources: dict[str, str] | None,
+) -> tuple[str, dict[str, str]]:
+    """Return `(target_sql, sources)` ready to hand to `sqlglot_lineage`.
+
+    Uses caller-supplied `qualified_sources` when present (skipping a sqlglot
+    parse+qualify pass per model — the dominant cost on wide DAGs). Otherwise
+    builds a fresh schema dict from DuckDB and qualifies every SQL model.
+
+    `sources` always excludes `model` (sqlglot wants the target as `sql=`,
+    not as a source entry) and any Python or unrendered model.
+    """
+    if qualified_sources is not None:
+        target_sql = qualified_sources.get(model)
+        if target_sql is None:
+            # Caller-supplied cache is missing the target; fall through to a
+            # full rebuild rather than silently returning a broken lineage.
+            qualified_sources = None
+    if qualified_sources is None:
+        # `qualify` needs a {table: {col: type}} schema to expand `t.*`.
+        schema_dict = {name: _column_types(conn, name) for name in rendered.models}
+        target_model_obj = rendered.models[model]
+        assert not isinstance(target_model_obj, PythonModel)  # checked by caller
+        raw_target = target_model_obj.rendered_sql
+        assert raw_target is not None
+        target_sql = _qualify(raw_target, schema_dict)
+        sources = {
+            n: _qualify(m.rendered_sql, schema_dict)
+            for n, m in rendered.models.items()
+            if n != model
+            and not isinstance(m, PythonModel)
+            and m.rendered_sql is not None
+        }
+        return target_sql, sources
+
+    assert target_sql is not None  # set above when qualified_sources hit
+    sources = {n: q for n, q in qualified_sources.items() if n != model}
+    return target_sql, sources
 
 
 def _qualify(sql: str, schema: dict[str, dict[str, str]]) -> str:

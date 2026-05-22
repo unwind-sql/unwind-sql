@@ -93,6 +93,7 @@ def get_column_impact(
     column: str,
     *,
     connection: duckdb.DuckDBPyConnection | None = None,
+    qualified_sources: dict[str, str] | None = None,
 ) -> ColumnImpact:
     """Compute the transitive downstream impact of `model.column`.
 
@@ -104,6 +105,9 @@ def get_column_impact(
         connection: An existing DuckDB connection holding the materialized
             DAG. When supplied, the in-function materialization pass is
             skipped — the single biggest cost on large DAGs.
+        qualified_sources: Pre-computed `{model: qualified_sql}` (cf.
+            `compute_qualified_sources`). When supplied, skips the per-call
+            sqlglot parse + qualify pass over every SQL model.
 
     Raises:
         ImpactError: if `model` or `column` is unknown, or if a downstream
@@ -120,7 +124,7 @@ def get_column_impact(
     rendered = project if _all_rendered(project) else project.render()
 
     if connection is not None:
-        return _impact_on(rendered, connection, model, column)
+        return _impact_on(rendered, connection, model, column, qualified_sources)
 
     conn = duckdb.connect(":memory:")
     try:
@@ -138,7 +142,7 @@ def get_column_impact(
                 project_root=rendered.root,
                 respect_external=False,
             )
-        return _impact_on(rendered, conn, model, column)
+        return _impact_on(rendered, conn, model, column, qualified_sources)
     finally:
         conn.close()
 
@@ -148,6 +152,7 @@ def _impact_on(
     conn: duckdb.DuckDBPyConnection,
     model: str,
     column: str,
+    qualified_sources: dict[str, str] | None,
 ) -> ColumnImpact:
     # Resolve source column to its canonical (case-correct) name and type.
     src_cols = _columns_actual(conn, model)
@@ -156,14 +161,22 @@ def _impact_on(
     canonical_source_column = src_cols[column.lower()]
     source_type = _type_of(conn, model, canonical_source_column)
 
-    # Per-model schema and qualified SQL (qualify() expands `t.*` so the
-    # lineage walker sees every output column explicitly).
-    schema = {name: _column_types(conn, name) for name in rendered.models}
-    qualified: dict[str, str] = {}
-    for name, m in rendered.models.items():
-        if isinstance(m, PythonModel) or m.rendered_sql is None:
-            continue
-        qualified[name] = _qualify(m.rendered_sql, schema)
+    # Per-model qualified SQL — qualify() expands `t.*` so the lineage walker
+    # sees every output column explicitly. Reuse caller-supplied cache when
+    # available to skip the sqlglot parse+qualify pass per model.
+    if qualified_sources is not None:
+        qualified = {
+            name: q
+            for name, q in qualified_sources.items()
+            if name in rendered.models
+        }
+    else:
+        schema = {name: _column_types(conn, name) for name in rendered.models}
+        qualified = {
+            name: _qualify(m.rendered_sql, schema)
+            for name, m in rendered.models.items()
+            if not isinstance(m, PythonModel) and m.rendered_sql is not None
+        }
 
     dag = rendered.dag()
     direct_children: dict[str, list[str]] = {}

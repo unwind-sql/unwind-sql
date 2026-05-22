@@ -33,7 +33,13 @@ False); when True the function is not called and the model name is aliased to
 the first parent at runtime.
 
 The loader prepends the project root to `sys.path` so any model file can
-`from helpers import ...` without ceremony.
+`from helpers import ...` without ceremony. A module-level `_LAST_ROOT`
+tracks the most recently loaded root so that loading a *different* project
+in the same process evicts the previous one's cached helper modules; this
+trick is not thread-safe — two threads loading different roots concurrently
+can clobber each other's `sys.path` / `sys.modules` state. Acceptable for a
+CLI-style library; if you embed unwind in a server that loads multiple
+projects, serialize calls to `load()`.
 """
 
 from __future__ import annotations
