@@ -17,6 +17,7 @@ def serve(
     project: Project,
     connection: duckdb.DuckDBPyConnection,
     *,
+    row_counts: dict[str, int] | None = None,
     host: str = "127.0.0.1",
     port: int = 8765,
     open_browser: bool = True,
@@ -27,6 +28,7 @@ def serve(
         project: A loaded project. Must already be materialized on
             `connection` — typically the connection owned by `RunResult`.
         connection: Live DuckDB connection holding the run's data.
+        row_counts: Optional pre-computed row counts (see `build_app`).
         host: Interface to bind. Stays on loopback by default.
         port: TCP port. Pass `0` to let the OS pick a free port.
         open_browser: If True, opens the default browser at the served URL.
@@ -34,7 +36,7 @@ def serve(
     Raises:
         WebServerError: if the port cannot be bound.
     """
-    app = build_app(project, connection)
+    app = build_app(project, connection, row_counts=row_counts)
     url = f"http://{host}:{port}/"
     print(f"unwind web UI: {url}  (Ctrl+C to stop)")
     if open_browser:

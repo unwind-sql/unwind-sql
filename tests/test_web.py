@@ -21,7 +21,8 @@ from unwind.web import build_app
 def client(example_data_ready: Path) -> Iterator[TestClient]:
     project = unwind.load(example_data_ready)
     with project.run(on_event=lambda _: None) as result:
-        assert result.project is not None and result.connection is not None
+        assert result.project is not None
+        assert result.connection is not None
         app = build_app(result.project, result.connection)
         with TestClient(app) as c:
             yield c
@@ -43,7 +44,8 @@ def llm_client(example_data_ready: Path) -> Iterator[TestClient]:
     }
     investigator = Investigator(model=TestModel(custom_output_args=canned))
     with unwind.load(example_data_ready).run(on_event=lambda _: None) as result:
-        assert result.project is not None and result.connection is not None
+        assert result.project is not None
+        assert result.connection is not None
         app = build_app(result.project, result.connection, investigator=investigator)
         with TestClient(app) as c:
             yield c
@@ -110,7 +112,8 @@ def test_dag_endpoint_exposes_disabled_flag(tmp_path: Path) -> None:
     )
     project = unwind.load(tmp_path)
     with project.run(on_event=lambda _: None) as result:
-        assert result.project is not None and result.connection is not None
+        assert result.project is not None
+        assert result.connection is not None
         app = build_app(result.project, result.connection)
         with TestClient(app) as c:
             payload = c.get("/api/dag").json()

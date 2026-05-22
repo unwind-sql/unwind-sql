@@ -33,6 +33,10 @@ class AppState:
     project: Project
     dag: DAG
     conn: duckdb.DuckDBPyConnection
+    # Row counts captured by the runner during materialization. Used by
+    # /api/dag so we don't re-issue 100+ `SELECT COUNT(*)` queries — most
+    # of which would hit views and re-execute their full SQL chain.
+    row_counts: dict[str, int] = field(default_factory=dict)
     # Memoized {model: qualified_sql} — expensive to compute (one DESCRIBE per
     # model + sqlglot's `qualify` pass), so cache and reuse across requests.
     # Built on first access via `app_state.qualified_sources()`.
@@ -60,6 +64,7 @@ def build_state(
     project: Project,
     connection: duckdb.DuckDBPyConnection,
     *,
+    row_counts: dict[str, int] | None = None,
     investigator: Investigator | None = None,
 ) -> AppState:
     """Wrap a project + its already-materialized DuckDB connection.
@@ -67,12 +72,17 @@ def build_state(
     The caller is expected to have run the project on `connection` first
     (typically via `RunResult` from `Project.run()`). The web UI reads
     straight from that connection — no re-execution, no recompute.
+
+    `row_counts`, if given, seeds the per-model row-count cache used by
+    `/api/dag`; otherwise the route falls back to live `SELECT COUNT(*)`
+    queries (slow when many models are views).
     """
     rendered = project if _is_rendered(project) else project.render()
     return AppState(
         project=rendered,
         dag=rendered.dag(),
         conn=connection,
+        row_counts=dict(row_counts) if row_counts else {},
         investigator=investigator,
     )
 

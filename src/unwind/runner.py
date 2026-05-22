@@ -129,6 +129,7 @@ class RunResult:
         serve(
             self.project,
             self.connection,
+            row_counts={m.name: m.row_count for m in self.executed},
             host=host,
             port=port,
             open_browser=open_browser,

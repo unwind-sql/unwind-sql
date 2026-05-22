@@ -62,7 +62,16 @@ def _classify(name: str) -> str:
 
 
 def _count_rows(state: AppState, name: str) -> int | None:
-    """Best-effort row count for the materialized model. None on failure."""
+    """Row count for `name`.
+
+    Reads from the runner-populated cache when available — populated for
+    every model materialized by `Project.run()`. Falls back to a live
+    `SELECT COUNT(*)` query (slow on views with long upstream chains) when
+    the model wasn't part of a recorded run.
+    """
+    cached = state.row_counts.get(name)
+    if cached is not None:
+        return cached
     try:
         row = state.conn.execute(f"SELECT COUNT(*) FROM {_quote_ident(name)}").fetchone()
     except Exception:

@@ -47,6 +47,7 @@ def build_app(
     project: Project,
     connection: duckdb.DuckDBPyConnection,
     *,
+    row_counts: dict[str, int] | None = None,
     investigator: Investigator | None = None,
 ) -> FastAPI:
     """Return a FastAPI app serving `project` from `connection`.
@@ -56,6 +57,10 @@ def build_app(
             `connection` (i.e. the caller ran the project on it first).
         connection: The live DuckDB connection holding the run's data.
             The web app reads it directly — no re-materialization.
+        row_counts: Optional pre-computed `{model_name: row_count}` —
+            seeded by `RunResult.show()` from the run's executed list so
+            `/api/dag` doesn't have to re-issue `SELECT COUNT(*)` per
+            model (which would re-execute every view chain).
         investigator: Optional pre-built `Investigator`. If `None`, one is
             built lazily on the first `/api/investigate` call using the
             provider read from `UNWIND_LLM_PROVIDER` (default: `openai`).
@@ -63,7 +68,10 @@ def build_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        app.state.unwind = build_state(project, connection, investigator=investigator)
+        app.state.unwind = build_state(
+            project, connection,
+            row_counts=row_counts, investigator=investigator,
+        )
         yield
 
     app = FastAPI(title="unwind", lifespan=lifespan, docs_url=None, redoc_url=None)
