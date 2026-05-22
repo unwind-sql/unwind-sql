@@ -15,8 +15,7 @@ import duckdb
 from fastapi import Depends, Request
 
 from unwind.dag import DAG
-from unwind.project import Project, PythonModel
-from unwind.runner import _materialize_disabled, materialize_model
+from unwind.project import Project
 
 if TYPE_CHECKING:
     # `pydantic_ai` is an optional extra, so types from `unwind.investigator`
@@ -41,9 +40,6 @@ class AppState:
     investigator: Investigator | None = None  # built lazily on first /api/investigate
     explanation_cache: OrderedDict[CacheKey, Explanation] = field(default_factory=OrderedDict)
 
-    def close(self) -> None:
-        self.conn.close()
-
     def qualified_sources(self) -> dict[str, str]:
         """Lazily compute and memoize per-model qualified SQL.
 
@@ -60,38 +56,30 @@ class AppState:
         return self._qualified_sources
 
 
-def build_state(project: Project, *, investigator: Investigator | None = None) -> AppState:
-    """Render the project (if needed), then materialize every model as a VIEW.
+def build_state(
+    project: Project,
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    investigator: Investigator | None = None,
+) -> AppState:
+    """Wrap a project + its already-materialized DuckDB connection.
 
-    VIEW (not TABLE) materialization is deliberate: it makes bootstrap near
-    instant on large DAGs by deferring the actual scan to whenever a route
-    queries the data. Trace and lineage routes only ever read a handful of
-    rows at a time, so the lazy cost is bounded.
+    The caller is expected to have run the project on `connection` first
+    (typically via `RunResult` from `Project.run()`). The web UI reads
+    straight from that connection — no re-execution, no recompute.
     """
     rendered = project if _is_rendered(project) else project.render()
-    dag = rendered.dag()
-    conn = duckdb.connect(":memory:")
-    for name in dag.execution_order:
-        model = rendered.models[name]
-        if model.disabled:
-            parents = sorted(dag.nodes[name].depends_on_models)
-            _materialize_disabled(conn, name, parents, debug=False)
-            continue
-        materialize_model(
-            conn,
-            model,
-            variables={},
-            project_root=rendered.root,
-            # The web UI doesn't write parquets — coerce external models into
-            # plain tables so the data is still queryable in-process.
-            respect_external=False,
-            # Force every model to be a VIEW so bootstrap stays cheap.
-            view_only=True,
-        )
-    return AppState(project=rendered, dag=dag, conn=conn, investigator=investigator)
+    return AppState(
+        project=rendered,
+        dag=rendered.dag(),
+        conn=connection,
+        investigator=investigator,
+    )
 
 
 def _is_rendered(project: Project) -> bool:
+    from unwind.project import PythonModel  # noqa: PLC0415
+
     return all(
         isinstance(m, PythonModel) or m.rendered_sql is not None
         for m in project.models.values()

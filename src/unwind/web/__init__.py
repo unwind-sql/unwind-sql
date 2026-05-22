@@ -1,8 +1,8 @@
 """FastAPI-based web UI for browsing a Project's DAG and column lineage.
 
-`Project.show()` calls `serve()` which runs the pipeline once on an in-memory
-DuckDB connection, then serves a Vite/React SPA from `_static/` plus a small
-JSON API:
+`RunResult.show()` calls `serve()` which reads from the run's already-
+materialized DuckDB connection and serves a Vite/React SPA from `_static/`
+plus a small JSON API:
 
 - ``GET /api/dag`` — nodes (with `kind` for raw/ref/int/fct) and edges
 - ``GET /api/model/<name>`` — sql, columns (DuckDB DESCRIBE), row count,

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import duckdb
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,11 +43,19 @@ class _NoCacheHtmlStatic(StaticFiles):
         return response
 
 
-def build_app(project: Project, *, investigator: Investigator | None = None) -> FastAPI:
-    """Return a FastAPI app for `project`. State is built on lifespan startup.
+def build_app(
+    project: Project,
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    investigator: Investigator | None = None,
+) -> FastAPI:
+    """Return a FastAPI app serving `project` from `connection`.
 
     Args:
-        project: The project to expose.
+        project: The project to expose. Must already be materialized on
+            `connection` (i.e. the caller ran the project on it first).
+        connection: The live DuckDB connection holding the run's data.
+            The web app reads it directly — no re-materialization.
         investigator: Optional pre-built `Investigator`. If `None`, one is
             built lazily on the first `/api/investigate` call using the
             provider read from `UNWIND_LLM_PROVIDER` (default: `openai`).
@@ -54,12 +63,8 @@ def build_app(project: Project, *, investigator: Investigator | None = None) -> 
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        state = build_state(project, investigator=investigator)
-        app.state.unwind = state
-        try:
-            yield
-        finally:
-            state.close()
+        app.state.unwind = build_state(project, connection, investigator=investigator)
+        yield
 
     app = FastAPI(title="unwind", lifespan=lifespan, docs_url=None, redoc_url=None)
 

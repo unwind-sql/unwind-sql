@@ -1,10 +1,11 @@
-"""serve(): blocking entry point used by `Project.show()`."""
+"""serve(): blocking entry point used by `RunResult.show()`."""
 
 from __future__ import annotations
 
 import threading
 import webbrowser
 
+import duckdb
 import uvicorn
 
 from unwind.project import Project
@@ -14,15 +15,18 @@ from unwind.web.errors import WebServerError
 
 def serve(
     project: Project,
+    connection: duckdb.DuckDBPyConnection,
     *,
     host: str = "127.0.0.1",
     port: int = 8765,
     open_browser: bool = True,
 ) -> None:
-    """Run the pipeline once, then block serving the web UI until Ctrl+C.
+    """Serve the web UI for `project` on `connection`. Blocks until Ctrl+C.
 
     Args:
-        project: A loaded project; rendered and run on an in-memory DuckDB.
+        project: A loaded project. Must already be materialized on
+            `connection` — typically the connection owned by `RunResult`.
+        connection: Live DuckDB connection holding the run's data.
         host: Interface to bind. Stays on loopback by default.
         port: TCP port. Pass `0` to let the OS pick a free port.
         open_browser: If True, opens the default browser at the served URL.
@@ -30,7 +34,7 @@ def serve(
     Raises:
         WebServerError: if the port cannot be bound.
     """
-    app = build_app(project)
+    app = build_app(project, connection)
     url = f"http://{host}:{port}/"
     print(f"unwind web UI: {url}  (Ctrl+C to stop)")
     if open_browser:

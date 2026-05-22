@@ -20,15 +20,16 @@ from unwind.web import build_app
 @pytest.fixture
 def client(example_data_ready: Path) -> Iterator[TestClient]:
     project = unwind.load(example_data_ready)
-    app = build_app(project)
-    with TestClient(app) as c:
-        yield c
+    with project.run(on_event=lambda _: None) as result:
+        assert result.project is not None and result.connection is not None
+        app = build_app(result.project, result.connection)
+        with TestClient(app) as c:
+            yield c
 
 
 @pytest.fixture
 def llm_client(example_data_ready: Path) -> Iterator[TestClient]:
     """Client wired with a deterministic TestModel (no LLM API calls)."""
-    project = unwind.load(example_data_ready)
     canned = {
         "summary": "Test summary: local_tax_fee equals 102.5 from gross_sales 500 * 0.2 + 2.5.",
         "findings": [
@@ -41,9 +42,11 @@ def llm_client(example_data_ready: Path) -> Iterator[TestClient]:
         ],
     }
     investigator = Investigator(model=TestModel(custom_output_args=canned))
-    app = build_app(project, investigator=investigator)
-    with TestClient(app) as c:
-        yield c
+    with unwind.load(example_data_ready).run(on_event=lambda _: None) as result:
+        assert result.project is not None and result.connection is not None
+        app = build_app(result.project, result.connection, investigator=investigator)
+        with TestClient(app) as c:
+            yield c
 
 
 def test_index_html_served(client: TestClient) -> None:
@@ -106,9 +109,11 @@ def test_dag_endpoint_exposes_disabled_flag(tmp_path: Path) -> None:
         "SELECT id FROM muted;\n", encoding="utf-8"
     )
     project = unwind.load(tmp_path)
-    app = build_app(project)
-    with TestClient(app) as c:
-        payload = c.get("/api/dag").json()
+    with project.run(on_event=lambda _: None) as result:
+        assert result.project is not None and result.connection is not None
+        app = build_app(result.project, result.connection)
+        with TestClient(app) as c:
+            payload = c.get("/api/dag").json()
 
     by_id = {n["id"]: n for n in payload["nodes"]}
     assert by_id["muted"]["disabled"] is True

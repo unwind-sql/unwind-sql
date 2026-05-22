@@ -274,6 +274,40 @@ def test_run_workers_invalid_raises(tmp_path: Path) -> None:
         project.run(workers=0)
 
 
+def test_run_workers_none_default_auto_resolves(tmp_path: Path) -> None:
+    """`workers=None` (the default) must pick a positive value and run cleanly."""
+    (tmp_path / "raw_a.sql").write_text("SELECT 1 AS x", encoding="utf-8")
+    (tmp_path / "raw_b.sql").write_text("SELECT 2 AS x", encoding="utf-8")
+    (tmp_path / "leaf.sql").write_text(
+        "SELECT x FROM raw_a UNION ALL SELECT x FROM raw_b", encoding="utf-8"
+    )
+    # No `workers=` kwarg at all — exercises the `None` default path.
+    result = unwind.load(tmp_path).run()
+    assert len(result.executed) == 3
+
+
+def test_run_workers_parallel_context_df_reads(tmp_path: Path) -> None:
+    """Concurrent `context.df` reads on the shared connection must serialize cleanly."""
+    (tmp_path / "raw_seed.sql").write_text(
+        "SELECT * FROM range(1000) AS t(x);", encoding="utf-8"
+    )
+    # Three sibling Python models that each pull the parent via context.df.
+    # Under `workers>1` they run concurrently on the shared connection;
+    # without the per-read lock the execute+fetch pair would race.
+    for name in ("a", "b", "c"):
+        (tmp_path / f"int_{name}.py").write_text(
+            "DEPENDS_ON = ('raw_seed',)\n"
+            "def model(context):\n"
+            "    tbl = context.df\n"
+            "    assert tbl.num_rows == 1000\n"
+            "    return tbl\n",
+            encoding="utf-8",
+        )
+    result = unwind.load(tmp_path).run(workers=4)
+    names = {m.name for m in result.executed}
+    assert {"raw_seed", "int_a", "int_b", "int_c"} <= names
+
+
 def test_run_workers_parallel_respects_topology(example_data_ready: Path) -> None:
     """workers>1 must still respect deps: int_ never lands before its raw_ parents."""
     result = unwind.load(example_data_ready).run(workers=4)

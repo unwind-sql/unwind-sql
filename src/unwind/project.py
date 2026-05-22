@@ -73,6 +73,12 @@ class ModelContext:
     use `context.df` — it reads from the single parent as a `pyarrow.Table`
     (lazy: nothing is fetched if the property is not accessed). For
     multi-parent models, `context.dfs[name]` does the same per parent.
+
+    `ddl_lock` is internal: when the runner executes with `workers > 1` it
+    passes a `threading.Lock` so that `context.df` / `context.dfs` reads
+    serialize on the single shared connection. User code that calls
+    `context.connection` directly bypasses this lock; in parallel runs,
+    prefer `context.df` / `context.dfs` or acquire `ddl_lock` manually.
     """
 
     connection: duckdb.DuckDBPyConnection
@@ -81,6 +87,9 @@ class ModelContext:
     # Names of the model's upstream parents (from PythonModel.depends_on).
     # Used by the `df` / `dfs` lazy loaders below.
     upstreams: tuple[str, ...] = ()
+    # Set by the runner in `workers > 1` runs. None in sequential mode and
+    # in user-facing code paths that construct a context manually.
+    ddl_lock: Any = None
 
     @property
     def df(self) -> Any:
@@ -100,9 +109,7 @@ class ModelContext:
                 f"context.df is ambiguous with {len(self.upstreams)} upstreams "
                 f"{self.upstreams!r}. Use context.dfs[name] instead."
             )
-        return self.connection.execute(
-            f'SELECT * FROM "{self.upstreams[0]}"'
-        ).to_arrow_table()
+        return _read_upstream(self.connection, self.upstreams[0], self.ddl_lock)
 
     @property
     def dfs(self) -> _LazyUpstreams:
@@ -112,7 +119,21 @@ class ModelContext:
         Each lookup re-executes a `SELECT *` (zero-copy on Arrow), so assign
         to a local if you read the same parent multiple times.
         """
-        return _LazyUpstreams(self.connection, self.upstreams)
+        return _LazyUpstreams(self.connection, self.upstreams, self.ddl_lock)
+
+
+def _read_upstream(
+    conn: duckdb.DuckDBPyConnection, name: str, lock: Any
+) -> Any:
+    """Run `SELECT * FROM "<name>"` and return its `pyarrow.Table`.
+
+    When `lock` is a `threading.Lock`, the execute+fetch pair runs under it
+    so concurrent workers can't trample the shared connection's result state.
+    """
+    if lock is None:
+        return conn.execute(f'SELECT * FROM "{name}"').to_arrow_table()
+    with lock:
+        return conn.execute(f'SELECT * FROM "{name}"').to_arrow_table()
 
 
 class _LazyUpstreams:
@@ -123,18 +144,24 @@ class _LazyUpstreams:
     declared `DEPENDS_ON` tuple — no fetch.
     """
 
-    __slots__ = ("_conn", "_names")
+    __slots__ = ("_conn", "_lock", "_names")
 
-    def __init__(self, conn: duckdb.DuckDBPyConnection, names: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        names: tuple[str, ...],
+        lock: Any = None,
+    ) -> None:
         self._conn = conn
         self._names = names
+        self._lock = lock
 
     def __getitem__(self, name: str) -> Any:
         if name not in self._names:
             raise KeyError(
                 f"unknown upstream {name!r}; declared in DEPENDS_ON: {self._names}"
             )
-        return self._conn.execute(f'SELECT * FROM "{name}"').to_arrow_table()
+        return _read_upstream(self._conn, name, self._lock)
 
     def __iter__(self):
         return iter(self._names)
@@ -322,24 +349,6 @@ class Project:
 
         return get_investigator(llm_provider=llm_provider, model=model, language=language)
 
-    def show(
-        self,
-        *,
-        vars: Mapping[str, object] | None = None,
-        host: str = "127.0.0.1",
-        port: int = 8765,
-        open_browser: bool = True,
-    ) -> None:
-        """Launch a web UI to navigate the DAG and column lineage. Blocks until Ctrl+C."""
-        from unwind.web import serve  # noqa: PLC0415
-
-        serve(
-            self._ensure_rendered(vars),
-            host=host,
-            port=port,
-            open_browser=open_browser,
-        )
-
     def run(
         self,
         *,
@@ -348,7 +357,7 @@ class Project:
         database: str | Path = ":memory:",
         connection: duckdb.DuckDBPyConnection | None = None,
         debug: bool = False,
-        workers: int = 1,
+        workers: int | None = None,
         on_event: ProgressCallback | None = None,
     ) -> RunResult:
         """Render, plan, and execute the project on DuckDB.
@@ -359,11 +368,14 @@ class Project:
         caller owns it. Otherwise Unwind opens, uses, and closes its own
         connection to `database`.
 
-        Pass `workers=N` (default `1`) to materialize independent models in
-        parallel via a `ThreadPoolExecutor` with one `conn.cursor()` per
-        worker. DuckDB serializes DDL at the engine layer; Python-model code
-        runs in worker threads. With `workers=1` execution stays on the
-        calling thread — bit-for-bit identical to pre-parallel behaviour.
+        `workers` defaults to `None`, which auto-resolves to
+        `min(os.cpu_count(), 8)`. Pass `1` to opt out of the thread pool
+        entirely (no lock, no pool — bit-for-bit identical to pre-parallel
+        behaviour). With `workers > 1`, independent models are dispatched
+        to a `ThreadPoolExecutor` with one `conn.cursor()` per worker, and
+        runner-issued DDL is serialized through an internal lock so DuckDB's
+        parallel-write hazards can't crash the run. Python-model bodies run
+        unlocked, so compute-bound parallelism still benefits.
 
         Progress: when `on_event` is `None`, the runner installs a default
         live progress UI iff stderr is a TTY, `rich` is importable, and

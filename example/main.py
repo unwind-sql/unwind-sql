@@ -97,4 +97,5 @@ else:
 # ==========================================
 
 # Bloque jusqu'à Ctrl+C ; ouvre le navigateur sur http://127.0.0.1:8765
-project.show()
+# (réutilise la connexion DuckDB du run — instantané, pas de recalcul).
+run_result.show()
