@@ -32,22 +32,16 @@ def get_docs(state: StateDep) -> dict[str, Any]:
     return _documentation(state).to_json()
 
 
-@router.get("/api/docs/{name}")
-def get_doc(name: str, state: StateDep) -> dict[str, Any]:
-    """Return the documentation entry for one model."""
-    doc = _documentation(state)
-    if name not in doc.models:
-        raise UnwindError(f"unknown model: {name!r}")
-    payload = doc.to_json()
-    return next(m for m in payload["models"] if m["name"] == name)
-
-
 @router.get("/api/docs/export")
 def export_docs(
     state: StateDep,
     fmt: str = Query("markdown", alias="format"),
 ) -> Response:
-    """Return the documentation as a downloadable file (`markdown` or `json`)."""
+    """Return the documentation as a downloadable file (`markdown` or `json`).
+
+    Declared **before** `/api/docs/{name}` so FastAPI matches the literal
+    `"export"` segment instead of treating it as a model name.
+    """
     doc = _documentation(state)
     if fmt == "markdown":
         body = doc.to_markdown()
@@ -69,6 +63,22 @@ def export_docs(
         status_code=400,
         detail=f"unsupported format {fmt!r}; expected 'markdown' or 'json'",
     )
+
+
+@router.get("/api/docs/{name}")
+def get_doc(name: str, state: StateDep) -> dict[str, Any]:
+    """Return the documentation entry for one model.
+
+    Renders only the requested model — on a 100+ model project the whole-
+    project JSON would otherwise be megabytes of `rendered_sql` repeated
+    per request.
+    """
+    doc = _documentation(state)
+    if name not in doc.models:
+        raise UnwindError(f"unknown model: {name!r}")
+    from unwind.docs.render_json import render_model_json  # noqa: PLC0415
+
+    return render_model_json(doc.models[name])
 
 
 def _documentation(state: AppState) -> Documentation:

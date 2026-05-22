@@ -43,6 +43,7 @@ _TRAILING_IDENT_RE = re.compile(
 
 def parse_column_descriptions(
     rendered_sql: str,
+    parsed_tree: exp.Expression | None = None,
 ) -> tuple[dict[str, str], tuple[Annotation, ...]]:
     """Return `({column_name: description}, free_annotations)` for a rendered SQL.
 
@@ -50,8 +51,12 @@ def parse_column_descriptions(
     outermost SELECT projection. Annotations carry 1-indexed line numbers
     inside `rendered_sql`. A SQL that fails to parse returns empty results
     rather than raising — documentation should never block on a bad model.
+
+    `parsed_tree` is an optimisation: when the caller already has a
+    sqlglot AST for `rendered_sql` (e.g. shared with `build_dag`), pass it
+    in to skip a second parse — meaningful on wide projects.
     """
-    column_names = _outer_select_column_names(rendered_sql)
+    column_names = _outer_select_column_names(rendered_sql, parsed_tree)
 
     descriptions: dict[str, str] = {}
     annotations: list[Annotation] = []
@@ -72,16 +77,21 @@ def parse_column_descriptions(
     return descriptions, tuple(annotations)
 
 
-def _outer_select_column_names(rendered_sql: str) -> set[str]:
+def _outer_select_column_names(
+    rendered_sql: str, parsed_tree: exp.Expression | None = None
+) -> set[str]:
     """Return the alias/name set of the outermost SELECT projection.
 
     Returns an empty set when the SQL doesn't parse, when it isn't a SELECT,
     or when it is a `SELECT *` with no resolvable column list.
     """
-    try:
-        tree = parse_one(rendered_sql, dialect=DIALECT)
-    except SqlglotError:
-        return set()
+    if parsed_tree is not None:
+        tree = parsed_tree
+    else:
+        try:
+            tree = parse_one(rendered_sql, dialect=DIALECT)
+        except SqlglotError:
+            return set()
 
     select = tree if isinstance(tree, exp.Select) else tree.find(exp.Select)
     if select is None:

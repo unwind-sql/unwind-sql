@@ -66,6 +66,11 @@ def render_json(doc: Documentation) -> dict[str, Any]:
     }
 
 
+def render_model_json(model: ModelDoc) -> dict[str, Any]:
+    """Render a single `ModelDoc` — used by the per-model API endpoint."""
+    return _render_model(model)
+
+
 def _render_model(model: ModelDoc) -> dict[str, Any]:
     return {
         "name": model.name,

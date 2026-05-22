@@ -402,6 +402,31 @@ def test_investigate_endpoint_unknown_model_emits_error(llm_client: TestClient) 
     assert not [e for e in events if e["event"] == "done"]
 
 
+def test_docs_export_markdown(client: TestClient) -> None:
+    r = client.get("/api/docs/export?format=markdown")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in r.headers.get("content-disposition", "")
+    # Sanity: contains at least one model heading.
+    assert "##" in r.text
+
+
+def test_docs_export_json(client: TestClient) -> None:
+    r = client.get("/api/docs/export?format=json")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/json")
+    payload = r.json()
+    assert "_schema" in payload
+    assert isinstance(payload["models"], list)
+
+
+def test_docs_single_model_endpoint(client: TestClient) -> None:
+    r = client.get("/api/docs/int_order_base")
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["name"] == "int_order_base"
+
+
 def _flatten(node: dict[str, Any]) -> list[str]:
     out = [node["name"]]
     for child in node.get("upstream", []):

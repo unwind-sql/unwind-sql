@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
+from typing import cast
 
 import sqlglot
 from sqlglot import exp
@@ -97,13 +98,21 @@ class DAG:
             raise DAGError(f"unknown model: {model!r}")
 
 
-def build_dag(project: Project) -> DAG:
+def build_dag(
+    project: Project,
+    *,
+    parsed_trees: dict[str, exp.Expression] | None = None,
+) -> DAG:
     """Build a dependency graph from a rendered project.
 
     Args:
         project: A `Project` whose SQL models have been rendered
             (`Model.rendered_sql` populated). Python models are picked up
             via their `depends_on` tuple.
+        parsed_trees: Optional `{model_name: sqlglot_ast}` cache. When a
+            caller already parsed the rendered SQL (e.g. `build_documentation`
+            sharing parses with `parse_column_descriptions`), pass it in to
+            skip the parse here.
 
     Raises:
         DAGError: if a SQL model is unrendered, fails to parse, a Python
@@ -129,7 +138,8 @@ def build_dag(project: Project) -> DAG:
             continue
         if model.rendered_sql is None:
             raise DAGError(f"model {name!r} is not rendered; call Project.render(...) first")
-        refs = _extract_refs(name, model.rendered_sql)
+        cached_tree = parsed_trees.get(name) if parsed_trees is not None else None
+        refs = _extract_refs(name, model.rendered_sql, tree=cached_tree)
         deps = refs & model_names
         sources = refs - model_names
         nodes[name] = Node(
@@ -146,11 +156,19 @@ def build_dag(project: Project) -> DAG:
     )
 
 
-def _extract_refs(model_name: str, rendered_sql: str) -> set[str]:
-    try:
-        tree = sqlglot.parse_one(rendered_sql, dialect=DIALECT)
-    except ParseError as exc:
-        raise DAGError(f"failed to parse model {model_name!r}: {exc}") from exc
+def _extract_refs(
+    model_name: str,
+    rendered_sql: str,
+    *,
+    tree: exp.Expression | None = None,
+) -> set[str]:
+    if tree is None:
+        try:
+            tree = cast(
+                "exp.Expression", sqlglot.parse_one(rendered_sql, dialect=DIALECT)
+            )
+        except ParseError as exc:
+            raise DAGError(f"failed to parse model {model_name!r}: {exc}") from exc
 
     cte_names = {cte.alias_or_name for cte in tree.find_all(exp.CTE)}
     refs: set[str] = set()
