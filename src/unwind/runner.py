@@ -484,7 +484,12 @@ def _materialize_python(
     view_only: bool,
     debug: bool,
 ) -> str:
-    context = ModelContext(connection=conn, variables=variables, project_root=project_root)
+    context = ModelContext(
+        connection=conn,
+        variables=variables,
+        project_root=project_root,
+        upstreams=model.depends_on,
+    )
     if debug:
         print(f"-- {model.name} (python {model.materialized})")
     result = model.func(context)

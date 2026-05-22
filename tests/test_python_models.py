@@ -142,6 +142,86 @@ def test_python_model_depends_on_is_respected(tmp_path: Path) -> None:
     assert by_name == {"src": 3, "sink_export": 1}
 
 
+def test_context_df_loads_single_upstream(tmp_path: Path) -> None:
+    """`context.df` is a lazy property that reads the single declared parent."""
+    _write(
+        tmp_path / "src.sql",
+        "SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(id, label);\n",
+    )
+    _write(
+        tmp_path / "sink_double.py",
+        """
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        DEPENDS_ON = ("src",)
+
+        def model(context):
+            df = context.df  # auto-loaded from src
+            doubled = df.set_column(0, "id", pc.multiply(df["id"], 2))
+            return doubled
+        """,
+    )
+
+    result = unwind.load(tmp_path).run()
+    by_name = {m.name: m.row_count for m in result.executed}
+    assert by_name == {"src": 2, "sink_double": 2}
+
+
+def test_context_df_raises_without_upstream(tmp_path: Path) -> None:
+    """A model with no DEPENDS_ON can't use context.df."""
+    _write(
+        tmp_path / "raw_x.py",
+        """
+        def model(context):
+            return context.df  # no parents declared
+        """,
+    )
+    with pytest.raises(RunError, match="exactly one upstream"):
+        unwind.load(tmp_path).run()
+
+
+def test_context_df_raises_with_multiple_upstreams(tmp_path: Path) -> None:
+    """With several parents `context.df` is ambiguous — use dfs[name]."""
+    _write(tmp_path / "a.sql", "SELECT 1 AS x;\n")
+    _write(tmp_path / "b.sql", "SELECT 2 AS y;\n")
+    _write(
+        tmp_path / "sink.py",
+        """
+        DEPENDS_ON = ("a", "b")
+
+        def model(context):
+            return context.df  # ambiguous: two parents
+        """,
+    )
+    with pytest.raises(RunError, match="ambiguous"):
+        unwind.load(tmp_path).run()
+
+
+def test_context_dfs_indexed_per_upstream(tmp_path: Path) -> None:
+    """`context.dfs[name]` loads a specific parent; iteration lists them."""
+    _write(tmp_path / "left.sql",  "SELECT 10 AS x;\n")
+    _write(tmp_path / "right.sql", "SELECT 20 AS y;\n")
+    _write(
+        tmp_path / "combo.py",
+        """
+        import pyarrow as pa
+
+        DEPENDS_ON = ("left", "right")
+
+        def model(context):
+            assert list(context.dfs) == ["left", "right"]
+            assert "left" in context.dfs
+            l = context.dfs["left"]
+            r = context.dfs["right"]
+            return pa.table({"sum": [l["x"][0].as_py() + r["y"][0].as_py()]})
+        """,
+    )
+    result = unwind.load(tmp_path).run()
+    by_name = {m.name: m.row_count for m in result.executed}
+    assert by_name["combo"] == 1
+
+
 def test_python_model_with_unknown_depends_on_raises(tmp_path: Path) -> None:
     _write(
         tmp_path / "raw_x.py",

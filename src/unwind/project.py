@@ -68,11 +68,85 @@ class ModelContext:
     models listed in `depends_on` have already been materialized when the
     function runs, so `context.connection.execute("SELECT * FROM fct_x").arrow()`
     is safe. `variables` are the Jinja vars passed to `Project.run(vars=...)`.
+
+    For the common "this model has one upstream and I want its rows" case,
+    use `context.df` — it reads from the single parent as a `pyarrow.Table`
+    (lazy: nothing is fetched if the property is not accessed). For
+    multi-parent models, `context.dfs[name]` does the same per parent.
     """
 
     connection: duckdb.DuckDBPyConnection
     variables: Mapping[str, Any]
     project_root: Path | None
+    # Names of the model's upstream parents (from PythonModel.depends_on).
+    # Used by the `df` / `dfs` lazy loaders below.
+    upstreams: tuple[str, ...] = ()
+
+    @property
+    def df(self) -> Any:
+        """Lazy: the single parent's rows as a `pyarrow.Table`.
+
+        Raises if the model has zero or more than one parent — use
+        `context.dfs[name]` instead when there are several.
+        """
+        if not self.upstreams:
+            raise ValueError(
+                "context.df requires the model to declare exactly one upstream "
+                "in DEPENDS_ON; got none. Use context.connection directly, "
+                "or add DEPENDS_ON = ('parent_model_name',)."
+            )
+        if len(self.upstreams) > 1:
+            raise ValueError(
+                f"context.df is ambiguous with {len(self.upstreams)} upstreams "
+                f"{self.upstreams!r}. Use context.dfs[name] instead."
+            )
+        return self.connection.execute(
+            f'SELECT * FROM "{self.upstreams[0]}"'
+        ).to_arrow_table()
+
+    @property
+    def dfs(self) -> _LazyUpstreams:
+        """Dict-like, lazy: `context.dfs[name]` → parent's Arrow table.
+
+        Iteration and `name in context.dfs` reveal which parents are declared.
+        Each lookup re-executes a `SELECT *` (zero-copy on Arrow), so assign
+        to a local if you read the same parent multiple times.
+        """
+        return _LazyUpstreams(self.connection, self.upstreams)
+
+
+class _LazyUpstreams:
+    """Dict-like view over a Python model's upstream parents.
+
+    `__getitem__` runs `SELECT * FROM "<name>"` against the runner's DuckDB
+    connection and returns a `pyarrow.Table`. Membership / iteration use the
+    declared `DEPENDS_ON` tuple — no fetch.
+    """
+
+    __slots__ = ("_conn", "_names")
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection, names: tuple[str, ...]) -> None:
+        self._conn = conn
+        self._names = names
+
+    def __getitem__(self, name: str) -> Any:
+        if name not in self._names:
+            raise KeyError(
+                f"unknown upstream {name!r}; declared in DEPENDS_ON: {self._names}"
+            )
+        return self._conn.execute(f'SELECT * FROM "{name}"').to_arrow_table()
+
+    def __iter__(self):
+        return iter(self._names)
+
+    def __len__(self) -> int:
+        return len(self._names)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._names
+
+    def __repr__(self) -> str:
+        return f"<LazyUpstreams names={self._names!r}>"
 
 
 @dataclass(frozen=True, slots=True)
