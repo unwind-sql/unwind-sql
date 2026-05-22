@@ -30,6 +30,7 @@ from sqlglot.errors import SqlglotError
 from sqlglot.lineage import Node as SqlglotNode
 from sqlglot.lineage import lineage as sqlglot_lineage
 
+from unwind._sql import DIALECT
 from unwind.errors import UnwindError
 from unwind.project import Project, PythonModel
 from unwind.runner import _materialize_disabled, _quote_ident, materialize_model
@@ -87,7 +88,11 @@ class ColumnImpact:
 
 
 def get_column_impact(
-    project: Project, model: str, column: str
+    project: Project,
+    model: str,
+    column: str,
+    *,
+    connection: duckdb.DuckDBPyConnection | None = None,
 ) -> ColumnImpact:
     """Compute the transitive downstream impact of `model.column`.
 
@@ -96,6 +101,9 @@ def get_column_impact(
             needed.
         model: Source model name.
         column: Source column name (case-insensitive).
+        connection: An existing DuckDB connection holding the materialized
+            DAG. When supplied, the in-function materialization pass is
+            skipped — the single biggest cost on large DAGs.
 
     Raises:
         ImpactError: if `model` or `column` is unknown, or if a downstream
@@ -110,6 +118,10 @@ def get_column_impact(
         pass
 
     rendered = project if _all_rendered(project) else project.render()
+
+    if connection is not None:
+        return _impact_on(rendered, connection, model, column)
+
     conn = duckdb.connect(":memory:")
     try:
         dag = rendered.dag()
@@ -126,49 +138,56 @@ def get_column_impact(
                 project_root=rendered.root,
                 respect_external=False,
             )
-
-        # Resolve source column to its canonical (case-correct) name and type.
-        src_cols = _columns_actual(conn, model)
-        if column.lower() not in src_cols:
-            raise ImpactError(f"unknown column: {model}.{column}")
-        canonical_source_column = src_cols[column.lower()]
-        source_type = _type_of(conn, model, canonical_source_column)
-
-        # Per-model schema and qualified SQL (qualify() expands `t.*` so the
-        # lineage walker sees every output column explicitly).
-        schema = {name: _column_types(conn, name) for name in rendered.models}
-        qualified: dict[str, str] = {}
-        for name, m in rendered.models.items():
-            if isinstance(m, PythonModel) or m.rendered_sql is None:
-                continue
-            qualified[name] = _qualify(m.rendered_sql, schema)
-
-        dag = rendered.dag()
-        # Build a reverse adjacency: parent → direct children.
-        direct_children: dict[str, list[str]] = {}
-        for child_name, node in dag.nodes.items():
-            for parent in node.depends_on_models:
-                direct_children.setdefault(parent.lower(), []).append(child_name)
-
-        affected, edges, opaque = _bfs_impact(
-            rendered=rendered,
-            conn=conn,
-            qualified=qualified,
-            direct_children=direct_children,
-            source_model=model,
-            source_column=canonical_source_column,
-        )
-
-        return ColumnImpact(
-            source_model=model,
-            source_column=canonical_source_column,
-            source_type=source_type,
-            affected=tuple(affected),
-            edges=tuple(edges),
-            opaque_consumers=tuple(sorted(opaque)),
-        )
+        return _impact_on(rendered, conn, model, column)
     finally:
         conn.close()
+
+
+def _impact_on(
+    rendered: Project,
+    conn: duckdb.DuckDBPyConnection,
+    model: str,
+    column: str,
+) -> ColumnImpact:
+    # Resolve source column to its canonical (case-correct) name and type.
+    src_cols = _columns_actual(conn, model)
+    if column.lower() not in src_cols:
+        raise ImpactError(f"unknown column: {model}.{column}")
+    canonical_source_column = src_cols[column.lower()]
+    source_type = _type_of(conn, model, canonical_source_column)
+
+    # Per-model schema and qualified SQL (qualify() expands `t.*` so the
+    # lineage walker sees every output column explicitly).
+    schema = {name: _column_types(conn, name) for name in rendered.models}
+    qualified: dict[str, str] = {}
+    for name, m in rendered.models.items():
+        if isinstance(m, PythonModel) or m.rendered_sql is None:
+            continue
+        qualified[name] = _qualify(m.rendered_sql, schema)
+
+    dag = rendered.dag()
+    direct_children: dict[str, list[str]] = {}
+    for child_name, node in dag.nodes.items():
+        for parent in node.depends_on_models:
+            direct_children.setdefault(parent.lower(), []).append(child_name)
+
+    affected, edges, opaque = _bfs_impact(
+        rendered=rendered,
+        conn=conn,
+        qualified=qualified,
+        direct_children=direct_children,
+        source_model=model,
+        source_column=canonical_source_column,
+    )
+
+    return ColumnImpact(
+        source_model=model,
+        source_column=canonical_source_column,
+        source_type=source_type,
+        affected=tuple(affected),
+        edges=tuple(edges),
+        opaque_consumers=tuple(sorted(opaque)),
+    )
 
 
 def _bfs_impact(
@@ -334,7 +353,7 @@ def _find_usages(
     unresolved-alias ambiguity.
     """
     try:
-        tree = sqlglot.parse_one(qualified_sql, dialect="duckdb")
+        tree = sqlglot.parse_one(qualified_sql, dialect=DIALECT)
     except SqlglotError:
         return set()
 
@@ -390,7 +409,7 @@ def _projection_outputs(
 ) -> list[str]:
     """Output columns of `child_name` whose lineage transitively reads from `source`."""
     try:
-        tree = sqlglot.parse_one(child_sql, dialect="duckdb")
+        tree = sqlglot.parse_one(child_sql, dialect=DIALECT)
     except SqlglotError:
         return []
     select = tree.find(exp.Select)
@@ -412,7 +431,7 @@ def _projection_outputs(
     affected: list[str] = []
     for col in output_columns:
         try:
-            root = sqlglot_lineage(col, sql=child_sql, sources=other_sources, dialect="duckdb")
+            root = sqlglot_lineage(col, sql=child_sql, sources=other_sources, dialect=DIALECT)
         except SqlglotError:
             continue
         if _lineage_contains(root, src_model_l, src_col_l):
@@ -468,7 +487,7 @@ def _extract_table_name(expr: object) -> str | None:
 def _projection_expression(qualified_sql: str, output_column: str) -> str:
     """Best-effort SQL fragment for `output_column` in the outermost SELECT."""
     try:
-        tree = sqlglot.parse_one(qualified_sql, dialect="duckdb")
+        tree = sqlglot.parse_one(qualified_sql, dialect=DIALECT)
     except SqlglotError:
         return ""
     select = tree.find(exp.Select)
@@ -481,5 +500,5 @@ def _projection_expression(qualified_sql: str, output_column: str) -> str:
             continue
         if alias.lower().strip('"') == target:
             body = expr.this if isinstance(expr, exp.Alias) else expr
-            return body.sql(dialect="duckdb")
+            return body.sql(dialect=DIALECT)
     return ""

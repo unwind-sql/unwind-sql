@@ -14,7 +14,14 @@ router = APIRouter()
 
 @router.get("/api/column/{model}/{column}")
 def get_column(model: str, column: str, state: StateDep) -> dict[str, Any]:
-    return _column_to_dict(get_column_lineage(state.project, model, column))
+    return _column_to_dict(
+        get_column_lineage(
+            state.project,
+            model,
+            column,
+            qualified_sources=state.qualified_sources(),
+        )
+    )
 
 
 def _column_to_dict(node: ColumnRef) -> dict[str, Any]:

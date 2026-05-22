@@ -116,7 +116,7 @@ def test_impact_python_consumer_marked_opaque(tmp_path: Path) -> None:
         DEPENDS_ON = ("src",)
 
         def model(context):
-            context.duckdb.execute("CREATE OR REPLACE TABLE sink AS SELECT x FROM src")
+            context.connection.execute("CREATE OR REPLACE TABLE sink AS SELECT x FROM src")
             return None
         """,
     )

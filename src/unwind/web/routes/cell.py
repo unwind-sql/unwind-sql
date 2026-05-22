@@ -37,6 +37,7 @@ def get_cell(req: CellRequest, state: StateDep) -> dict[str, Any]:
         where=req.where,
         depth=req.depth,
         max_values=req.max_values,
+        connection=state.conn,
     )
     return {
         "model": result.model,

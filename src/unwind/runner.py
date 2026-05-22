@@ -12,7 +12,7 @@ A Python model is materialized by calling its `model(context)` function. The
 return value is registered with DuckDB (zero-copy for Arrow), then promoted
 to a `TABLE` (default) or stays as a registered relation when `MATERIALIZED
 = "view"`. A `None` return value means the function handled its own side
-effects via `context.duckdb`.
+effects via `context.connection`.
 
 The runner owns its DuckDB connection (in-memory unless a path is provided)
 and returns a `RunResult` that records every executed model with its row
@@ -79,6 +79,7 @@ def run_project(
     variables: Mapping[str, object] | None = None,
     target: str | None = None,
     database: str | Path = ":memory:",
+    connection: duckdb.DuckDBPyConnection | None = None,
     debug: bool = False,
 ) -> RunResult:
     """Render `project`, build its DAG, and materialize models on DuckDB.
@@ -88,7 +89,10 @@ def run_project(
         variables: Jinja vars passed through to the renderer and to Python
             models via `ModelContext.variables`.
         target: If set, only `target` and its transitive upstream are run.
-        database: DuckDB database location. Defaults to in-memory.
+        database: DuckDB database location. Defaults to in-memory. Ignored
+            when `connection` is provided.
+        connection: An existing `DuckDBPyConnection` to materialize into. The
+            caller retains ownership — the connection is not closed.
         debug: If True, print each model's SQL and timing to stdout.
 
     Raises:
@@ -101,6 +105,8 @@ def run_project(
     if target is not None:
         dag = dag.subdag(target)
 
+    if connection is not None:
+        return _execute(rendered, dag, connection, variables=variables or {}, debug=debug)
     with closing(duckdb.connect(str(database))) as conn:
         return _execute(rendered, dag, conn, variables=variables or {}, debug=debug)
 
@@ -174,6 +180,7 @@ def materialize_model(
     variables: Mapping[str, Any],
     project_root: Path | None,
     respect_external: bool,
+    view_only: bool = False,
     debug: bool = False,
 ) -> str:
     """Materialize one model into `conn` and return its `kind_label`.
@@ -181,13 +188,27 @@ def materialize_model(
     Used by the runner, by `trace`, and by the web app's bootstrap. Set
     `respect_external=False` to coerce `external` SQL models into plain
     tables — useful when callers only need the data in DuckDB and don't
-    want to write parquet files.
+    want to write parquet files. Set `view_only=True` to force every model
+    (SQL and Python) to materialize as a VIEW, regardless of its declared
+    `@materialized`; this lets the web UI boot lazily on huge DAGs by
+    deferring actual computation until queries land.
     """
     if isinstance(model, PythonModel):
         return _materialize_python(
-            conn, model, variables=variables, project_root=project_root, debug=debug
+            conn,
+            model,
+            variables=variables,
+            project_root=project_root,
+            view_only=view_only,
+            debug=debug,
         )
-    return _materialize_sql(conn, model, respect_external=respect_external, debug=debug)
+    return _materialize_sql(
+        conn,
+        model,
+        respect_external=respect_external,
+        view_only=view_only,
+        debug=debug,
+    )
 
 
 def _materialize_disabled(
@@ -223,6 +244,7 @@ def _materialize_sql(
     model: Model,
     *,
     respect_external: bool,
+    view_only: bool,
     debug: bool,
 ) -> str:
     sql = model.rendered_sql
@@ -246,7 +268,7 @@ def _materialize_sql(
         conn.execute(view_stmt)
         return "external"
 
-    kind = "VIEW" if model.materialized == "view" else "TABLE"
+    kind = "VIEW" if view_only or model.materialized == "view" else "TABLE"
     statement = f"CREATE OR REPLACE {kind} {_quote_ident(name)} AS ({body})"
     if debug:
         print(f"-- {name} ({kind.lower()})\n{statement}")
@@ -260,16 +282,17 @@ def _materialize_python(
     *,
     variables: Mapping[str, Any],
     project_root: Path | None,
+    view_only: bool,
     debug: bool,
 ) -> str:
-    context = ModelContext(duckdb=conn, variables=variables, project_root=project_root)
+    context = ModelContext(connection=conn, variables=variables, project_root=project_root)
     if debug:
         print(f"-- {model.name} (python {model.materialized})")
     result = model.func(context)
     name = model.name
 
     if result is None:
-        # The function used `context.duckdb` to register what it wanted.
+        # The function used `context.connection` to register what it wanted.
         if not _relation_exists(conn, name):
             raise ValueError(
                 f"Python model {name!r} returned None and did not register "
@@ -279,13 +302,14 @@ def _materialize_python(
 
     if isinstance(result, str):
         body = result.rstrip().rstrip(";")
-        conn.execute(f"CREATE OR REPLACE TABLE {_quote_ident(name)} AS ({body})")
-        return "python-table"
+        kind = "VIEW" if view_only else "TABLE"
+        conn.execute(f"CREATE OR REPLACE {kind} {_quote_ident(name)} AS ({body})")
+        return f"python-{kind.lower()}"
 
     tmp_name = f"__py_src_{name}"
     conn.register(tmp_name, result)
     try:
-        if model.materialized == "view":
+        if view_only or model.materialized == "view":
             conn.execute(
                 f"CREATE OR REPLACE VIEW {_quote_ident(name)} AS "
                 f"SELECT * FROM {_quote_ident(tmp_name)}"

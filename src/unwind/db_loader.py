@@ -1,19 +1,21 @@
-"""Database loader: read SQL models (and macros) from rows of a table.
+"""Load a project from in-memory rows.
 
-The table must have at least a name column and a SQL column. Inline
-`-- @group:` / `-- @tags:` / `-- @materialized:` / `-- @location:` directives
-inside the SQL are parsed exactly as for filesystem-loaded models — the DB
-loader does not invent a parallel metadata convention.
+Use this when the model definitions live somewhere other than a filesystem —
+a metadata table, a YAML/JSON registry, an HTTP endpoint, anywhere. Fetch
+the rows yourself (Unwind has no opinion on the source) and hand them to
+`load_from_rows`.
 
-Macros live in the same table, distinguished by a `kind` column whose value is
-`'macro'` for macros and `'model'` (or anything else / NULL) for models. Set
-`kind_column=None` to load every row as a model.
-
-SQLAlchemy is imported lazily so it stays an optional dependency
-(`pip install unwind-sql[db]`).
+Each row carries a model `name`, its raw `sql`, and an optional `kind` —
+rows whose `kind` is the string `"macro"` are registered as Jinja macros
+instead of models. Inline `-- @group:` / `-- @tags:` / `-- @materialized:` /
+`-- @location:` / `-- @disabled:` directives inside the SQL are honoured
+exactly as for filesystem-loaded models.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, cast
 
 from unwind.errors import ProjectLoadError
 from unwind.loader import _parse_metadata
@@ -21,116 +23,60 @@ from unwind.project import Model, ModelOrPython, Project
 
 _MACRO_KIND = "macro"
 
+Row = Mapping[str, Any] | Sequence[Any]
 
-def load_from_db(  # noqa: PLR0912
-    connection_string: str,
-    table: str,
+
+def load_from_rows(
+    rows: Iterable[Row],
     *,
-    name_column: str = "name",
-    sql_column: str = "sql",
-    kind_column: str | None = None,
-    where: str | None = None,
-    schema: str | None = None,
+    name_key: str = "name",
+    sql_key: str = "sql",
+    kind_key: str | None = "kind",
+    origin: str = "rows",
 ) -> Project:
-    """Load a project from rows of a database table.
+    """Build a `Project` from rows of `(name, sql, kind?)`.
 
     Args:
-        connection_string: A SQLAlchemy URL (e.g. ``postgresql://user:pw@host/db``,
-            ``sqlite:///path.db``, ``mysql+pymysql://...``).
-        table: Name of the table holding the SQL definitions.
-        name_column: Column containing the model/macro name. Defaults to ``"name"``.
-        sql_column: Column containing the raw SQL text. Defaults to ``"sql"``.
-        kind_column: Optional column whose value distinguishes models from macros.
-            Rows where this column equals ``"macro"`` are registered as Jinja macros;
-            all other rows are registered as models. When ``None``, every row is
-            treated as a model.
-        where: Optional raw SQL ``WHERE`` fragment used to filter rows (e.g.
-            ``"project = 'retail' AND active"``). Passed through SQLAlchemy ``text()``.
-        schema: Optional schema qualifier for ``table``.
-
-    Returns:
-        A `Project` populated with raw (un-rendered) models and macros.
+        rows: Iterable of dicts or tuples. Dicts are looked up via the
+            `*_key` parameters; tuples are read positionally as
+            `(name, sql, kind)` — `kind` is optional.
+        name_key: Mapping key for the model/macro name. Ignored for tuples.
+        sql_key: Mapping key for the raw SQL text. Ignored for tuples.
+        kind_key: Mapping key whose value distinguishes models from macros
+            (the string ``"macro"`` flags a macro; anything else is a model).
+            Pass ``None`` to treat every row as a model.
+        origin: Human-readable prefix used in error messages and stored on
+            each `Model.origin` (e.g. ``"rows"`` → ``"rows#stg_users"``).
 
     Raises:
-        ProjectLoadError: if SQLAlchemy is missing, the table is empty, names are
-            duplicated, a row has empty/null name or SQL, or metadata parsing fails.
+        ProjectLoadError: empty input, duplicate names, missing/blank
+            ``name``/``sql`` fields, or metadata parsing errors.
     """
-    try:
-        from sqlalchemy import MetaData, Table, create_engine, select, text  # noqa: PLC0415
-    except ImportError as exc:  # pragma: no cover - exercised in tests with monkeypatch
-        raise ProjectLoadError(
-            "load_from_db requires SQLAlchemy; install with "
-            "`uv pip install unwind-sql[db]` (or `pip install unwind-sql[db]`)"
-        ) from exc
-
-    engine = create_engine(connection_string)
-    metadata = MetaData()
-    try:
-        table_obj = Table(table, metadata, autoload_with=engine, schema=schema)
-    except Exception as exc:  # SQLAlchemy raises various subclasses
-        raise ProjectLoadError(f"could not reflect table {table!r}: {exc}") from exc
-
-    columns = {c.name for c in table_obj.columns}
-    required = {name_column, sql_column}
-    if kind_column is not None:
-        required.add(kind_column)
-    missing = required - columns
-    if missing:
-        raise ProjectLoadError(
-            f"table {table!r} is missing required column(s): {sorted(missing)}"
-        )
-
-    select_cols = [table_obj.c[name_column], table_obj.c[sql_column]]
-    if kind_column is not None:
-        select_cols.append(table_obj.c[kind_column])
-
-    stmt = select(*select_cols)
-    if where:
-        stmt = stmt.where(text(where))
-
-    qualified = f"{schema}.{table}" if schema else table
-
     models: dict[str, ModelOrPython] = {}
     macros: dict[str, str] = {}
+    seen_any = False
 
-    with engine.connect() as conn:
-        rows = conn.execute(stmt).all()
+    for index, row in enumerate(rows):
+        seen_any = True
+        name, raw_sql, kind = _unpack(row, name_key, sql_key, kind_key, origin, index)
 
-    for row in rows:
-        name = row[0]
-        raw_sql = row[1]
-        kind = row[2] if kind_column is not None else None
-
-        if not name or not isinstance(name, str):
-            raise ProjectLoadError(
-                f"row in {qualified!r} has empty or non-string {name_column!r}: {name!r}"
-            )
-        if not raw_sql or not isinstance(raw_sql, str):
-            raise ProjectLoadError(
-                f"row {name!r} in {qualified!r} has empty or non-string {sql_column!r}"
-            )
-
-        origin = f"db:{qualified}#{name}"
+        row_origin = f"{origin}#{name}"
 
         if kind == _MACRO_KIND:
             if name in macros:
-                raise ProjectLoadError(
-                    f"duplicate macro name {name!r} in {qualified!r}"
-                )
+                raise ProjectLoadError(f"duplicate macro name {name!r} in {origin}")
             macros[name] = raw_sql
             continue
 
         if name in models:
-            raise ProjectLoadError(
-                f"duplicate model name {name!r} in {qualified!r}"
-            )
+            raise ProjectLoadError(f"duplicate model name {name!r} in {origin}")
         group, tags, materialized, location, disabled = _parse_metadata(
-            raw_sql, source=origin
+            raw_sql, source=row_origin
         )
         models[name] = Model(
             name=name,
             path=None,
-            origin=origin,
+            origin=row_origin,
             raw_sql=raw_sql,
             group=group,
             tags=tags,
@@ -139,10 +85,67 @@ def load_from_db(  # noqa: PLR0912
             disabled=disabled,
         )
 
+    if not seen_any:
+        raise ProjectLoadError(f"no rows provided to load_from_rows ({origin})")
     if not models:
-        raise ProjectLoadError(
-            f"no models found in {qualified!r}"
-            + (f" matching where={where!r}" if where else "")
-        )
+        raise ProjectLoadError(f"no models found in {origin} (only macros)")
 
     return Project(models=models, macros=macros, root=None)
+
+
+def _unpack(
+    row: Row,
+    name_key: str,
+    sql_key: str,
+    kind_key: str | None,
+    origin: str,
+    index: int,
+) -> tuple[str, str, Any]:
+    if isinstance(row, Mapping):
+        name, raw_sql, kind = _unpack_mapping(
+            cast(Mapping[str, Any], row), name_key, sql_key, kind_key, origin, index
+        )
+    else:
+        name, raw_sql, kind = _unpack_sequence(
+            cast(Sequence[Any], row), kind_key, origin, index
+        )
+
+    if not isinstance(name, str) or not name:
+        raise ProjectLoadError(
+            f"row {index} in {origin} has empty or non-string name: {name!r}"
+        )
+    if not isinstance(raw_sql, str) or not raw_sql:
+        raise ProjectLoadError(
+            f"row {name!r} in {origin} has empty or non-string sql"
+        )
+    return name, raw_sql, kind
+
+
+def _unpack_mapping(
+    row: Mapping[str, Any],
+    name_key: str,
+    sql_key: str,
+    kind_key: str | None,
+    origin: str,
+    index: int,
+) -> tuple[Any, Any, Any]:
+    if name_key not in row:
+        raise ProjectLoadError(f"row {index} in {origin} missing {name_key!r} field")
+    if sql_key not in row:
+        raise ProjectLoadError(f"row {index} in {origin} missing {sql_key!r} field")
+    kind = row[kind_key] if kind_key is not None and kind_key in row else None
+    return row[name_key], row[sql_key], kind
+
+
+def _unpack_sequence(
+    row: Sequence[Any],
+    kind_key: str | None,
+    origin: str,
+    index: int,
+) -> tuple[Any, Any, Any]:
+    if len(row) < 2:
+        raise ProjectLoadError(
+            f"row {index} in {origin} has fewer than 2 fields (need name, sql)"
+        )
+    kind = row[2] if len(row) >= 3 and kind_key is not None else None
+    return row[0], row[1], kind

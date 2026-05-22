@@ -1,15 +1,20 @@
 # unwind
 
-SQL orchestration with Jinja templating, a semantic layer, and lineage at the
-table, column, and value level. An alternative to Dbt and SQLMesh, focused on
-deterministic value-lineage backed by a SQLGlot AST and a DuckDB execution
-engine.
+A DuckDB-only SQL/Python orchestrator with Jinja templating, a semantic layer,
+and lineage at the table, column, and value level. An alternative to Dbt and
+SQLMesh, focused on deterministic value-lineage backed by a SQLGlot AST and
+DuckDB as the single execution engine.
 
 A project is a directory of `.sql` and `.py` files. SQL models give full
 table/column/value lineage via the SQLGlot AST. Python models are opaque to
 lineage but participate in the DAG like any other node — typical use cases
-are sources (loading data from Oracle / Postgres / Parquet) and sinks
-(exporting a final table elsewhere). The two kinds compose freely.
+are **sources** (you bring your own Postgres/Oracle/S3/CSV ingestion code)
+and **sinks** (exporting a final table elsewhere). The two kinds compose
+freely.
+
+Unwind deliberately ships zero DB-third-party dependencies. If you want to
+pull from Postgres, you `pip install psycopg` yourself; if you want Oracle,
+you `pip install oracledb`. Unwind's only DB is DuckDB.
 
 > Status: **alpha** — table, column, and deterministic value lineage all work
 > end-to-end, plus a web UI and an optional LLM investigator (pydantic-ai,
@@ -18,18 +23,15 @@ are sources (loading data from Oracle / Postgres / Parquet) and sinks
 ## Install
 
 The core install (`duckdb`, `jinja2`, `sqlglot`) is enough to load a project,
-plan its DAG, run it, and compute table / column / value lineage in Python.
-Anything that talks to the outside world — the web UI, the LLM investigator,
-the source connectors, the SQL-stored-in-DB loader — lives behind an
-optional extra so you only install what you actually use.
+plan its DAG, run it on DuckDB, and compute table / column / value lineage in
+Python. The two surfaces that reach beyond the core — the web UI and the LLM
+investigator — live behind optional extras.
 
-| Extra        | What it enables                                           | Pulls in                          |
-| ------------ | --------------------------------------------------------- | --------------------------------- |
-| `web`        | `Project.show()` (FastAPI/Uvicorn DAG explorer)           | `fastapi`, `uvicorn[standard]`    |
-| `llm`        | `Project.get_investigator()` (multi-provider via pydantic-ai) | `pydantic-ai`                |
-| `db`         | `unwind.load_from_db()` + `connectors.sqlalchemy(...)`    | `sqlalchemy`                      |
-| `connectors` | `unwind.connectors.parquet/oracle/...` for Python models  | `pyarrow`, `oracledb`             |
-| `all`        | Everything above, no decisions required                   | sum of the four extras            |
+| Extra | What it enables                                               | Pulls in                       |
+| ----- | ------------------------------------------------------------- | ------------------------------ |
+| `web` | `Project.show()` (FastAPI/Uvicorn DAG explorer)               | `fastapi`, `uvicorn[standard]` |
+| `llm` | `Project.get_investigator()` (multi-provider via pydantic-ai) | `pydantic-ai`                  |
+| `all` | Both of the above, no decisions required                      | sum of the two extras          |
 
 Pick what you need:
 
@@ -37,14 +39,13 @@ Pick what you need:
 pip install unwind-sql                    # core only
 pip install "unwind-sql[web]"             # add the web UI
 pip install "unwind-sql[web,llm]"         # web UI + LLM investigator
-pip install "unwind-sql[connectors]"      # Python-model loaders (parquet, oracle, …)
 pip install "unwind-sql[all]"             # everything — recommended for trying it out
 ```
 
 For local development on this repo:
 
 ```bash
-uv sync --all-extras    # equivalent to the `[all]` extra
+uv sync    # core + the dev group (which includes web/llm bits and pyarrow)
 ```
 
 ## Run the example
@@ -72,13 +73,10 @@ The script:
    lineage tree). Press `Ctrl+C` to stop.
 
 `raw_orders` in the example is a **Python model** ([example/models/raw_orders.py](example/models/raw_orders.py))
-backed by a one-line `load_data()` helper. Switch its backend without touching
-any SQL:
-
-```bash
-UNWIND_SOURCE_MODE=parquet   uv run python main.py   # default
-UNWIND_SOURCE_MODE=oracle    uv run python main.py   # needs oracledb + ORACLE_DSN
-```
+that reads the bundled parquet fixture via `pyarrow`. To wire it to your own
+source (Postgres, Oracle, S3, REST API, …) edit `example/models/helpers.py` —
+Unwind has no built-in connectors, so you import the lib you want and call it
+yourself.
 
 See [example/main.py](example/main.py) and [example/README.md](example/README.md)
 for the model walkthrough.
@@ -91,24 +89,65 @@ A file in `models/` whose Python module defines a top-level callable
 import load_data` just works.
 
 ```python
-# models/raw_orders.py
-from helpers import load_data
+# models/raw_orders.py — Arrow-native ingestion, zero-copy into DuckDB
+import pyarrow.parquet as pq
 
 GROUP = "costs"
 MATERIALIZED = "view"     # "table" (default) or "view"
 DEPENDS_ON = ()           # tuple of upstream model names
 
 def model(context):
-    # context.duckdb (live connection), context.variables (Jinja vars),
-    # context.project_root (the path passed to unwind.load)
-    return load_data("raw_orders")  # pyarrow.Table, DataFrame, str (SQL), or None
+    # context.connection (live DuckDBPyConnection),
+    # context.variables (Jinja vars), context.project_root (path passed to load()).
+    return pq.read_table("data/raw_orders.parquet")
 ```
 
-The return value is registered into DuckDB (zero-copy for Arrow). For a
-sink, do the work via `context.duckdb` and `return None`.
+The return value is registered into DuckDB (zero-copy for Arrow tables and
+DuckDB relations). Returning a `str` runs it as SQL; returning `None` means
+the function did its own work via `context.connection`.
 
-`unwind.connectors` ships tiny helpers (`parquet`, `oracle`, `sqlalchemy`) so
-your `load_data()` reduces to a few lines of branching.
+Want to ingest from Postgres? Install `psycopg` yourself and let DuckDB pull
+it natively:
+
+```python
+def model(context):
+    context.connection.execute("INSTALL postgres; LOAD postgres;")
+    context.connection.execute(
+        "CREATE OR REPLACE TABLE raw_orders AS "
+        "SELECT * FROM postgres_scan('host=… dbname=…', 'public', 'orders')"
+    )
+```
+
+## Loading SQL definitions from somewhere else
+
+Models usually live in `.sql` files, but you can also feed them in directly
+from any source you can fetch yourself — a metadata table, a YAML registry,
+an HTTP endpoint. Unwind doesn't connect to anything; you bring the rows.
+
+```python
+import unwind
+
+rows = [
+    {"name": "stg_users", "sql": "SELECT id, email FROM raw_users", "kind": "model"},
+    {"name": "plus_one",  "sql": "{% macro plus_one(c) %}{{c}}+1{% endmacro %}", "kind": "macro"},
+]
+project = unwind.load_from_rows(rows, origin="catalog.sql_defs")
+```
+
+## Reusing an existing DuckDB connection
+
+`Project.run()` opens a fresh in-memory DuckDB by default, but you can pass
+your own connection — useful when you've already installed extensions,
+attached external databases, or configured secrets:
+
+```python
+import duckdb, unwind
+
+conn = duckdb.connect(":memory:")
+conn.execute("INSTALL httpfs; LOAD httpfs;")
+unwind.load("models/").run(connection=conn)
+conn.execute("SELECT * FROM fct_warehouse_profitability").fetchall()  # still open
+```
 
 ## Test
 

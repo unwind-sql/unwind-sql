@@ -23,14 +23,11 @@ int: table intermédiaire
 fct: table de faits (agrégée)
 
 `raw_orders` est un **modèle Python** ([raw_orders.py](models/raw_orders.py)) qui
-délègue à `helpers.load_data()`. Bascule entre Parquet et Oracle (ou tout
-SQLAlchemy) avec une variable d'environnement, sans toucher au SQL :
-
-```bash
-UNWIND_SOURCE_MODE=parquet    uv run python main.py   # défaut
-UNWIND_SOURCE_MODE=oracle     uv run python main.py
-UNWIND_SOURCE_MODE=sqlalchemy uv run python main.py
-```
+délègue à `helpers.load_data()` — une simple lecture parquet via `pyarrow`,
+zero-copy vers DuckDB. Pour brancher une vraie source (Postgres via `psycopg`,
+Oracle via `oracledb`, S3 via `duckdb.read_parquet`, ...), éditez
+`models/helpers.py` et installez la lib qui va bien : Unwind n'embarque aucune
+dépendance DB tierce, c'est à vous de choisir.
 
 Les autres `raw_*` restent en SQL parce qu'ils sont déjà des `SELECT * FROM
 read_parquet(...)`. Migration possible un par un.

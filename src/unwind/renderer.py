@@ -2,9 +2,10 @@
 
 A single `jinja2.Environment` is built per render pass. Macros in
 `project.macros` (loaded by `unwind.load` from `macros/*.sql`, or by
-`unwind.load_from_db` from rows tagged as macros) are imported into the global
-namespace so any model can call `{{ apply_fee(...) }}` without an explicit
-`{% import %}`. User `vars` are exposed as top-level template variables.
+`unwind.load_from_rows` from rows tagged as macros) are imported into the
+global namespace so any model can call `{{ apply_fee(...) }}` without an
+explicit `{% import %}`. User `vars` are exposed as top-level template
+variables.
 
 Undefined variables raise (`StrictUndefined`) — silent `None` substitutions are
 the most common source of subtle SQL bugs.

@@ -17,7 +17,7 @@ EXAMPLE_FILTERED_ORDERS = 10  # int_order_base filters out qty == 0 (ORD-1009)
 
 def test_run_full_example_pipeline(example_data_ready: Path) -> None:
     project = unwind.load(example_data_ready)
-    result = project.run(engine="duckdb")
+    result = project.run()
 
     assert len(result.executed) == EXAMPLE_MODEL_COUNT
     assert result.total_duration_s > 0
@@ -38,7 +38,7 @@ def test_run_full_example_pipeline(example_data_ready: Path) -> None:
 
 
 def test_run_with_target_only_runs_subdag(example_data_ready: Path) -> None:
-    result = unwind.load(example_data_ready).run(engine="duckdb", target="int_tax_costs")
+    result = unwind.load(example_data_ready).run(target="int_tax_costs")
 
     names = result.names
     assert "fct_warehouse_profitability" not in names
@@ -49,7 +49,7 @@ def test_run_with_target_only_runs_subdag(example_data_ready: Path) -> None:
 
 def test_run_persists_tables_to_database_file(example_data_ready: Path, tmp_path: Path) -> None:
     db_path = tmp_path / "out.duckdb"
-    unwind.load(example_data_ready).run(engine="duckdb", database=db_path)
+    unwind.load(example_data_ready).run(database=db_path)
 
     assert db_path.exists()
     with duckdb.connect(str(db_path)) as conn:
@@ -59,17 +59,26 @@ def test_run_persists_tables_to_database_file(example_data_ready: Path, tmp_path
     assert sum(r[0] for r in rows) == EXAMPLE_FILTERED_ORDERS
 
 
-def test_run_unsupported_engine_raises(tmp_project: Path) -> None:
-    project = unwind.load(tmp_project)
-    with pytest.raises(ValueError, match="unsupported engine"):
-        project.run(engine="snowflake")
+def test_run_with_external_connection_does_not_close_it(tmp_path: Path) -> None:
+    """Caller-owned connections must survive `.run()` (no implicit close)."""
+    (tmp_path / "m.sql").write_text("SELECT 42 AS answer;\n", encoding="utf-8")
+    project = unwind.load(tmp_path)
+
+    conn = duckdb.connect(":memory:")
+    try:
+        result = project.run(connection=conn)
+        assert result.executed[0].row_count == 1
+        row = conn.execute("SELECT answer FROM m").fetchone()
+        assert row == (42,)
+    finally:
+        conn.close()
 
 
 def test_run_failing_sql_wraps_in_run_error(tmp_path: Path) -> None:
     (tmp_path / "broken.sql").write_text("SELECT * FROM does_not_exist_anywhere", encoding="utf-8")
     project = unwind.load(tmp_path)
     with pytest.raises(RunError, match="broken"):
-        project.run(engine="duckdb")
+        project.run()
 
 
 def test_run_simple_in_memory_pipeline(tmp_path: Path) -> None:
@@ -81,7 +90,7 @@ def test_run_simple_in_memory_pipeline(tmp_path: Path) -> None:
         "SELECT id * 2 AS id, label FROM src;",
         encoding="utf-8",
     )
-    result = unwind.load(tmp_path).run(engine="duckdb")
+    result = unwind.load(tmp_path).run()
 
     assert result.names == ["src", "doubled"]
     by_name = {m.name: m.row_count for m in result.executed}
@@ -91,7 +100,7 @@ def test_run_simple_in_memory_pipeline(tmp_path: Path) -> None:
 def test_run_strips_trailing_semicolon(tmp_path: Path) -> None:
     """Models often end with `;` — runner must wrap them in `(...)` cleanly."""
     (tmp_path / "m.sql").write_text("SELECT 42 AS answer;\n", encoding="utf-8")
-    result = unwind.load(tmp_path).run(engine="duckdb")
+    result = unwind.load(tmp_path).run()
     assert result.executed[0].row_count == 1
 
 
@@ -106,7 +115,7 @@ def test_run_view_materialization_creates_view_not_table(tmp_path: Path) -> None
         encoding="utf-8",
     )
     db_path = tmp_path / "out.duckdb"
-    unwind.load(tmp_path).run(engine="duckdb", database=db_path)
+    unwind.load(tmp_path).run(database=db_path)
 
     with duckdb.connect(str(db_path)) as conn:
         kinds = dict(
@@ -129,7 +138,7 @@ def test_run_external_materialization_writes_parquet(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     db_path = tmp_path / "out.duckdb"
-    result = unwind.load(tmp_path).run(engine="duckdb", database=db_path)
+    result = unwind.load(tmp_path).run(database=db_path)
 
     assert out_path.exists(), "external model must write to its location"
     by_name = {m.name: m.row_count for m in result.executed}
@@ -149,7 +158,7 @@ def test_run_external_creates_parent_directories(tmp_path: Path) -> None:
         "SELECT 42 AS answer;\n",
         encoding="utf-8",
     )
-    unwind.load(tmp_path).run(engine="duckdb")
+    unwind.load(tmp_path).run()
     assert out_path.exists()
 
 
@@ -161,7 +170,7 @@ def test_run_external_with_jinja_location(tmp_path: Path) -> None:
         "SELECT 1 AS x;\n",
         encoding="utf-8",
     )
-    unwind.load(tmp_path).run(engine="duckdb")
+    unwind.load(tmp_path).run()
     assert (tmp_path / "out.parquet").exists()
 
 
@@ -182,7 +191,7 @@ def test_run_disabled_model_bypasses_to_first_parent(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     db_path = tmp_path / "out.duckdb"
-    result = unwind.load(tmp_path).run(engine="duckdb", database=db_path)
+    result = unwind.load(tmp_path).run(database=db_path)
 
     by_name = {m.name: m.row_count for m in result.executed}
     assert by_name == {"src": 2, "middle": 2, "leaf": 2}
@@ -212,7 +221,7 @@ def test_run_disabled_chain_bypasses_through(tmp_path: Path) -> None:
     (tmp_path / "leaf.sql").write_text(
         "SELECT id FROM mid2;\n", encoding="utf-8"
     )
-    result = unwind.load(tmp_path).run(engine="duckdb")
+    result = unwind.load(tmp_path).run()
     by_name = {m.name: m.row_count for m in result.executed}
     assert by_name == {"src": 2, "mid1": 2, "mid2": 2, "leaf": 2}
 
@@ -233,7 +242,7 @@ def test_run_disabled_python_model_is_not_called(tmp_path: Path) -> None:
     (tmp_path / "leaf.sql").write_text(
         "SELECT id FROM py_model;\n", encoding="utf-8"
     )
-    result = unwind.load(tmp_path).run(engine="duckdb")
+    result = unwind.load(tmp_path).run()
     by_name = {m.name: m.row_count for m in result.executed}
     assert by_name == {"raw_seed": 1, "py_model": 1, "leaf": 1}
 
@@ -247,4 +256,4 @@ def test_run_disabled_leaf_without_parents_is_skipped(tmp_path: Path) -> None:
         "SELECT id FROM src;\n", encoding="utf-8"
     )
     with pytest.raises(RunError, match="leaf"):
-        unwind.load(tmp_path).run(engine="duckdb")
+        unwind.load(tmp_path).run()

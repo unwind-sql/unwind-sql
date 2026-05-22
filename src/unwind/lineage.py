@@ -17,6 +17,7 @@ from sqlglot.errors import SqlglotError
 from sqlglot.lineage import Node as SqlglotNode
 from sqlglot.lineage import lineage as sqlglot_lineage
 
+from unwind._sql import DIALECT
 from unwind.dag import build_dag
 from unwind.errors import UnwindError
 from unwind.project import Project, PythonModel
@@ -64,7 +65,11 @@ def get_table_lineage(project: Project, target: str) -> TableLineage:
     return TableLineage(target=target, nodes=keep, edges=edges)
 
 
-def compute_qualified_sources(project: Project) -> dict[str, str]:
+def compute_qualified_sources(
+    project: Project,
+    *,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, str]:
     """Materialize the project once and return `{model_name: qualified_sql}`.
 
     The qualified SQL has every `SELECT t.*` rewritten to its explicit column
@@ -73,6 +78,9 @@ def compute_qualified_sources(project: Project) -> dict[str, str]:
     and runs the whole DAG), so callers that want to compute many lineages
     over the same project should call this **once** and pass the result to
     `get_column_lineage(..., qualified_sources=...)`.
+
+    Pass `connection=` to reuse a DuckDB connection that already has every
+    model materialized — skips the in-function materialization pass.
     """
     from unwind.trace import _column_types, _materialize, _qualify  # noqa: PLC0415
 
@@ -84,18 +92,23 @@ def compute_qualified_sources(project: Project) -> dict[str, str]:
                 f"upstream model {name!r} is not rendered; call Project.render(...) first"
             )
 
-    conn = duckdb.connect(":memory:")
-    try:
-        _materialize(project, conn)
-        schema_dict = {name: _column_types(conn, name) for name in project.models}
-    finally:
-        conn.close()
+    if connection is not None:
+        schema_dict = {name: _column_types(connection, name) for name in project.models}
+    else:
+        conn = duckdb.connect(":memory:")
+        try:
+            _materialize(project, conn)
+            schema_dict = {name: _column_types(conn, name) for name in project.models}
+        finally:
+            conn.close()
 
-    return {
-        name: _qualify(model.rendered_sql, schema_dict)  # type: ignore[arg-type]
-        for name, model in project.models.items()
-        if not isinstance(model, PythonModel)
-    }
+    result: dict[str, str] = {}
+    for name, model in project.models.items():
+        if isinstance(model, PythonModel):
+            continue
+        assert model.rendered_sql is not None  # validated above
+        result[name] = _qualify(model.rendered_sql, schema_dict)
+    return result
 
 
 def get_column_lineage(
@@ -104,12 +117,14 @@ def get_column_lineage(
     column: str,
     *,
     qualified_sources: dict[str, str] | None = None,
+    connection: duckdb.DuckDBPyConnection | None = None,
 ) -> ColumnRef:
     """Trace the lineage of `target.column` through every upstream model.
 
     Pass a pre-computed `qualified_sources` (cf. `compute_qualified_sources`)
     to skip the per-call materialization — useful when scanning many columns
-    or when a long-lived process can cache the schema.
+    or when a long-lived process can cache the schema. Alternatively pass
+    `connection=` to reuse an already-materialized DuckDB.
     """
     if target not in project.models:
         raise LineageError(f"unknown model: {target!r}")
@@ -123,7 +138,7 @@ def get_column_lineage(
         raise LineageError(f"model {target!r} is not rendered; call Project.render(...) first")
 
     if qualified_sources is None:
-        qualified_sources = compute_qualified_sources(project)
+        qualified_sources = compute_qualified_sources(project, connection=connection)
 
     target_sql = qualified_sources[target]
     # Restrict the source set passed to sqlglot to the transitive upstream
@@ -137,7 +152,7 @@ def get_column_lineage(
             column,
             sql=target_sql,
             sources=sources,
-            dialect="duckdb",
+            dialect=DIALECT,
         )
     except SqlglotError as exc:
         raise LineageError(f"column lineage failed for {target}.{column}: {exc}") from exc
@@ -148,6 +163,6 @@ def get_column_lineage(
 def _convert(node: SqlglotNode) -> ColumnRef:
     return ColumnRef(
         name=node.name or "?",
-        expression=node.expression.sql(dialect="duckdb"),
+        expression=node.expression.sql(dialect=DIALECT),
         upstream=tuple(_convert(d) for d in node.downstream),
     )

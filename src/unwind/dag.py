@@ -24,6 +24,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from unwind._sql import DIALECT
 from unwind.errors import UnwindError
 from unwind.project import Project, PythonModel
 
@@ -147,7 +148,7 @@ def build_dag(project: Project) -> DAG:
 
 def _extract_refs(model_name: str, rendered_sql: str) -> set[str]:
     try:
-        tree = sqlglot.parse_one(rendered_sql, dialect="duckdb")
+        tree = sqlglot.parse_one(rendered_sql, dialect=DIALECT)
     except ParseError as exc:
         raise DAGError(f"failed to parse model {model_name!r}: {exc}") from exc
 

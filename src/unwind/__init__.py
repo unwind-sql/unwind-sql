@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from unwind.__about__ import __version__
 from unwind.dag import DAG, DAGError, Node
-from unwind.db_loader import load_from_db
+from unwind.db_loader import load_from_rows
 from unwind.errors import ProjectLoadError, TemplateRenderError, UnwindError
 from unwind.impact import ColumnImpact, ImpactedColumn, ImpactEdge, ImpactError
 from unwind.lineage import ColumnRef, LineageError, TableLineage
@@ -51,7 +51,7 @@ __all__ = [
     "UnwindError",
     "__version__",
     "load",
-    "load_from_db",
+    "load_from_rows",
 ]
 
 

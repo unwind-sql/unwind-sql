@@ -11,5 +11,18 @@ def test_version_is_exposed() -> None:
 
 
 def test_public_api_surface() -> None:
-    for name in ("load", "Project", "Model", "RunResult", "RunError", "DAG", "UnwindError"):
+    for name in (
+        "load",
+        "load_from_rows",
+        "Project",
+        "Model",
+        "RunResult",
+        "RunError",
+        "DAG",
+        "UnwindError",
+    ):
         assert hasattr(unwind, name), name
+
+
+def test_load_from_db_removed() -> None:
+    assert not hasattr(unwind, "load_from_db")

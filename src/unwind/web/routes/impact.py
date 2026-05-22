@@ -20,7 +20,7 @@ router = APIRouter()
 
 @router.get("/api/column/{model}/{column}/impact")
 def get_impact(model: str, column: str, state: StateDep) -> dict[str, Any]:
-    return _to_dict(get_column_impact(state.project, model, column))
+    return _to_dict(get_column_impact(state.project, model, column, connection=state.conn))
 
 
 def _to_dict(impact: ColumnImpact) -> dict[str, Any]:

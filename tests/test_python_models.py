@@ -57,7 +57,7 @@ def test_python_model_runs_and_is_queryable(tmp_path: Path) -> None:
         "SELECT x * 2 AS xx FROM raw_x ORDER BY x;\n",
     )
 
-    result = unwind.load(tmp_path).run(engine="duckdb")
+    result = unwind.load(tmp_path).run()
     by_name = {m.name: m.row_count for m in result.executed}
     assert by_name == {"raw_x": 3, "fct_doubled": 3}
     # Topological invariant: raw_x runs before fct_doubled.
@@ -85,7 +85,7 @@ def test_python_model_helper_import_uses_models_dir(tmp_path: Path) -> None:
         """,
     )
 
-    result = unwind.load(tmp_path).run(engine="duckdb")
+    result = unwind.load(tmp_path).run()
     by_name = {m.name: m.row_count for m in result.executed}
     assert by_name == {"raw_x": 2}
 
@@ -103,7 +103,7 @@ def test_python_model_view_materialization_creates_view(tmp_path: Path) -> None:
         """,
     )
     db_path = tmp_path / "out.duckdb"
-    unwind.load(tmp_path).run(engine="duckdb", database=db_path)
+    unwind.load(tmp_path).run(database=db_path)
 
     with duckdb.connect(str(db_path)) as conn:
         kinds = dict(
@@ -128,7 +128,7 @@ def test_python_model_depends_on_is_respected(tmp_path: Path) -> None:
 
         def model(context):
             # Side-effecting sink: register a one-row summary derived from src.
-            context.duckdb.execute(
+            context.connection.execute(
                 "CREATE OR REPLACE TABLE sink_export AS "
                 "SELECT COUNT(*) AS n FROM src"
             )
@@ -136,7 +136,7 @@ def test_python_model_depends_on_is_respected(tmp_path: Path) -> None:
         """,
     )
 
-    result = unwind.load(tmp_path).run(engine="duckdb")
+    result = unwind.load(tmp_path).run()
     assert result.names == ["src", "sink_export"]
     by_name = {m.name: m.row_count for m in result.executed}
     assert by_name == {"src": 3, "sink_export": 1}
@@ -154,7 +154,7 @@ def test_python_model_with_unknown_depends_on_raises(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(unwind.DAGError, match="DEPENDS_ON"):
-        unwind.load(tmp_path).run(engine="duckdb")
+        unwind.load(tmp_path).run()
 
 
 def test_python_model_returning_sql_string(tmp_path: Path) -> None:
@@ -165,7 +165,7 @@ def test_python_model_returning_sql_string(tmp_path: Path) -> None:
             return "SELECT * FROM (VALUES (1), (2)) AS t(x)"
         """,
     )
-    result = unwind.load(tmp_path).run(engine="duckdb")
+    result = unwind.load(tmp_path).run()
     assert result.executed[0].row_count == 2
 
 
@@ -178,7 +178,7 @@ def test_python_model_returning_none_without_registering_fails(tmp_path: Path) -
         """,
     )
     with pytest.raises(RunError, match="did not register"):
-        unwind.load(tmp_path).run(engine="duckdb")
+        unwind.load(tmp_path).run()
 
 
 def test_python_model_duplicate_with_sql_name_raises(tmp_path: Path) -> None:
@@ -219,7 +219,7 @@ def test_python_model_runtime_error_wraps_in_run_error(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(RunError, match="raw_x"):
-        unwind.load(tmp_path).run(engine="duckdb")
+        unwind.load(tmp_path).run()
 
 
 def test_python_model_arrow_value_lineage_reaches_leaf(tmp_path: Path) -> None:
@@ -306,7 +306,7 @@ def test_loader_helpers_module_is_evicted_on_root_change(tmp_path: Path) -> None
     unwind.load(a)
 
     db = tmp_path / "out.duckdb"
-    unwind.load(b).run(engine="duckdb", database=db)
+    unwind.load(b).run(database=db)
     with duckdb.connect(str(db)) as conn:
         rows = conn.execute("SELECT who FROM raw_x").fetchall()
     assert rows == [("B",)]
@@ -320,5 +320,5 @@ def test_sql_models_still_work_alongside_python_models(tmp_path: Path) -> None:
     )
     project = unwind.load(tmp_path)
     assert isinstance(project.models["raw_x"], Model)
-    result = project.run(engine="duckdb")
+    result = project.run()
     assert result.executed[0].row_count == 1

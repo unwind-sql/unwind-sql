@@ -32,7 +32,7 @@ def _measure(force_kind: str | None, n: int) -> list[float]:
         project = unwind.load("sql/")
         if force_kind is not None:
             _override_materialization(project, force_kind)
-        result = project.run(engine="duckdb", vars={"d_reporting": "31/10/2025"})
+        result = project.run(vars={"d_reporting": "31/10/2025"})
         durations.append(result.total_duration_s)
     return durations
 

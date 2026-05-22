@@ -63,13 +63,13 @@ class Model:
 class ModelContext:
     """Runtime handle passed to a Python model's `model(context)` function.
 
-    `duckdb` is the live DuckDB connection used by the runner. Upstream models
-    listed in `depends_on` have already been materialized when the function
-    runs, so `context.duckdb.execute("SELECT * FROM fct_x").arrow()` is safe.
-    `variables` are the Jinja vars passed to `Project.run(vars=...)`.
+    `connection` is the live DuckDB connection used by the runner. Upstream
+    models listed in `depends_on` have already been materialized when the
+    function runs, so `context.connection.execute("SELECT * FROM fct_x").arrow()`
+    is safe. `variables` are the Jinja vars passed to `Project.run(vars=...)`.
     """
 
-    duckdb: duckdb.DuckDBPyConnection
+    connection: duckdb.DuckDBPyConnection
     variables: Mapping[str, Any]
     project_root: Path | None
 
@@ -82,7 +82,7 @@ class PythonModel:
     return value can be a `pyarrow.Table`, `pandas.DataFrame`, a
     `duckdb.DuckDBPyRelation`, a raw SQL string (wrapped as
     `CREATE TABLE name AS (...)`), or `None` if the function performed its
-    own side-effects via `context.duckdb`.
+    own side-effects via `context.connection`.
 
     `depends_on` is the explicit list of upstream model names (Python models
     have no SQL, so dependencies cannot be inferred from an AST). The runner
@@ -145,15 +145,25 @@ class Project:
         *,
         column: str,
         vars: Mapping[str, object] | None = None,
+        qualified_sources: dict[str, str] | None = None,
+        connection: duckdb.DuckDBPyConnection | None = None,
     ) -> ColumnRef:
         """Return the column-level lineage tree for `target.column`.
 
         Raises if `target` is a Python model: column lineage requires an
-        SQL AST that Python models don't expose.
+        SQL AST that Python models don't expose. Pass `qualified_sources` (cf.
+        `compute_qualified_sources`) or `connection=` (already-materialized
+        DuckDB) to skip the per-call materialization pass.
         """
         from unwind.lineage import get_column_lineage  # noqa: PLC0415
 
-        return get_column_lineage(self._ensure_rendered(vars), target, column)
+        return get_column_lineage(
+            self._ensure_rendered(vars),
+            target,
+            column,
+            qualified_sources=qualified_sources,
+            connection=connection,
+        )
 
     def get_column_impact(
         self,
@@ -161,16 +171,20 @@ class Project:
         *,
         column: str,
         vars: Mapping[str, object] | None = None,
+        connection: duckdb.DuckDBPyConnection | None = None,
     ) -> ColumnImpact:
         """Return the transitive downstream impact of `model.column`.
 
         Walks the DAG forward and reports every column that would need
         attention if `column` were renamed or retyped. Symmetric to
-        `get_column_lineage` but in the opposite direction.
+        `get_column_lineage` but in the opposite direction. Pass `connection=`
+        to reuse a DuckDB connection that already holds the materialized DAG.
         """
         from unwind.impact import get_column_impact  # noqa: PLC0415
 
-        return get_column_impact(self._ensure_rendered(vars), model, column)
+        return get_column_impact(
+            self._ensure_rendered(vars), model, column, connection=connection
+        )
 
     def _ensure_rendered(self, variables: Mapping[str, object] | None) -> Project:
         if all(
@@ -189,8 +203,13 @@ class Project:
         depth: int | None = None,
         max_values: int | None = 5,
         vars: Mapping[str, object] | None = None,
+        connection: duckdb.DuckDBPyConnection | None = None,
     ) -> TraceResult:
-        """Trace `(model.column, where)` back to the source values that contributed."""
+        """Trace `(model.column, where)` back to the source values that contributed.
+
+        Pass `connection=` to reuse a DuckDB connection that already holds the
+        materialized DAG; this skips the per-call materialization pass.
+        """
         from unwind.trace import trace_value  # noqa: PLC0415
 
         return trace_value(
@@ -200,6 +219,7 @@ class Project:
             where=where,
             depth=depth,
             max_values=max_values,
+            connection=connection,
         )
 
     def get_investigator(
@@ -235,16 +255,20 @@ class Project:
     def run(
         self,
         *,
-        engine: str = "duckdb",
         vars: Mapping[str, object] | None = None,
         target: str | None = None,
         database: str | Path = ":memory:",
+        connection: duckdb.DuckDBPyConnection | None = None,
         debug: bool = False,
     ) -> RunResult:
-        """Render, plan, and execute the project on the chosen engine."""
-        if engine != "duckdb":
-            raise ValueError(f"unsupported engine: {engine!r} (only 'duckdb' is supported)")
+        """Render, plan, and execute the project on DuckDB.
 
+        Pass `connection=` to reuse an existing `DuckDBPyConnection` (e.g. one
+        with extensions installed or secrets configured). When `connection` is
+        given, `database` is ignored and the connection is left open — the
+        caller owns it. Otherwise Unwind opens, uses, and closes its own
+        connection to `database`.
+        """
         from unwind.runner import run_project  # noqa: PLC0415
 
         return run_project(
@@ -252,5 +276,6 @@ class Project:
             variables=vars,
             target=target,
             database=database,
+            connection=connection,
             debug=debug,
         )

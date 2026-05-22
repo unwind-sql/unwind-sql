@@ -32,6 +32,7 @@ from sqlglot.lineage import Node as SqlglotNode
 from sqlglot.lineage import lineage as sqlglot_lineage
 from sqlglot.optimizer.qualify import qualify
 
+from unwind._sql import DIALECT
 from unwind.errors import UnwindError
 from unwind.project import Project, PythonModel
 from unwind.runner import _materialize_disabled, _quote_ident, materialize_model
@@ -88,8 +89,15 @@ def trace_value(
     where: Mapping[str, Any],
     depth: int | None = None,
     max_values: int | None = DEFAULT_MAX_VALUES,
+    connection: duckdb.DuckDBPyConnection | None = None,
 ) -> TraceResult:
-    """Trace a cell `(model.column, where)` to its source values."""
+    """Trace a cell `(model.column, where)` to its source values.
+
+    Pass `connection=` to reuse a DuckDB connection that already has every
+    model materialized (e.g. the web app's bootstrap connection). When given,
+    `trace_value` skips its own materialization step entirely — the single
+    biggest cost on large DAGs.
+    """
     if not where:
         raise TraceError("`where` must contain at least one column/value")
     if model not in project.models:
@@ -101,50 +109,63 @@ def trace_value(
         )
 
     rendered = project if _is_rendered(project) else project.render()
+
+    if connection is not None:
+        return _trace_on(rendered, connection, model, column, where, depth, max_values)
+
     conn = duckdb.connect(":memory:")
     try:
         _materialize(rendered, conn)
-
-        # Build a {table: {col: type}} schema from DuckDB. sqlglot's `qualify`
-        # uses it to expand `t.*` projections into explicit column lists,
-        # which is required for column lineage to walk through models that
-        # rely on `*` (otherwise sqlglot raises "cannot find column X").
-        schema_dict = {
-            name: _column_types(conn, name) for name in rendered.models
-        }
-
-        target_model_obj = rendered.models[model]
-        assert not isinstance(target_model_obj, PythonModel)  # checked above
-        target_sql = target_model_obj.rendered_sql
-        assert target_sql is not None  # _is_rendered or render() guarantees
-        target_sql = _qualify(target_sql, schema_dict)
-
-        sources = {
-            n: _qualify(m.rendered_sql, schema_dict)
-            for n, m in rendered.models.items()
-            if n != model
-            and not isinstance(m, PythonModel)
-            and m.rendered_sql is not None
-        }
-        try:
-            sg_root = sqlglot_lineage(
-                column, sql=target_sql, sources=sources, dialect="duckdb"
-            )
-        except SqlglotError as exc:
-            raise TraceError(f"column lineage failed for {model}.{column}: {exc}") from exc
-
-        normalized_where = _normalize_predicate(conn, model, dict(where))
-        root = _build_node(
-            sg_root,
-            conn,
-            target_model=model,
-            target_predicate=normalized_where,
-            depth=depth,
-            max_values=max_values,
-        )
-        return TraceResult(model=model, column=column, where=normalized_where, root=root)
+        return _trace_on(rendered, conn, model, column, where, depth, max_values)
     finally:
         conn.close()
+
+
+def _trace_on(
+    rendered: Project,
+    conn: duckdb.DuckDBPyConnection,
+    model: str,
+    column: str,
+    where: Mapping[str, Any],
+    depth: int | None,
+    max_values: int | None,
+) -> TraceResult:
+    # Build a {table: {col: type}} schema from DuckDB. sqlglot's `qualify`
+    # uses it to expand `t.*` projections into explicit column lists,
+    # which is required for column lineage to walk through models that
+    # rely on `*` (otherwise sqlglot raises "cannot find column X").
+    schema_dict = {name: _column_types(conn, name) for name in rendered.models}
+
+    target_model_obj = rendered.models[model]
+    assert not isinstance(target_model_obj, PythonModel)  # checked above
+    target_sql = target_model_obj.rendered_sql
+    assert target_sql is not None  # _is_rendered or render() guarantees
+    target_sql = _qualify(target_sql, schema_dict)
+
+    sources = {
+        n: _qualify(m.rendered_sql, schema_dict)
+        for n, m in rendered.models.items()
+        if n != model
+        and not isinstance(m, PythonModel)
+        and m.rendered_sql is not None
+    }
+    try:
+        sg_root = sqlglot_lineage(
+            column, sql=target_sql, sources=sources, dialect=DIALECT
+        )
+    except SqlglotError as exc:
+        raise TraceError(f"column lineage failed for {model}.{column}: {exc}") from exc
+
+    normalized_where = _normalize_predicate(conn, model, dict(where))
+    root = _build_node(
+        sg_root,
+        conn,
+        target_model=model,
+        target_predicate=normalized_where,
+        depth=depth,
+        max_values=max_values,
+    )
+    return TraceResult(model=model, column=column, where=normalized_where, root=root)
 
 
 def _qualify(sql: str, schema: dict[str, dict[str, str]]) -> str:
@@ -158,9 +179,12 @@ def _qualify(sql: str, schema: dict[str, dict[str, str]]) -> str:
     the trace altogether.
     """
     try:
-        parsed = sqlglot.parse_one(sql, dialect="duckdb")
-        qualified = qualify(parsed, schema=schema, dialect="duckdb")
-        return qualified.sql(dialect="duckdb")
+        parsed = sqlglot.parse_one(sql, dialect=DIALECT)
+        # sqlglot.qualify wants `dict[str, object]`; our schema is the more
+        # specific `dict[str, dict[str, str]]` (a valid `object`) — widen.
+        widened: dict[str, object] = dict(schema)
+        qualified = qualify(parsed, schema=widened, dialect=DIALECT)
+        return qualified.sql(dialect=DIALECT)
     except SqlglotError:
         return sql
 
@@ -231,7 +255,7 @@ def _build_node(
 ) -> TraceNode:
     model, column = _extract_ref(sg_node, target_model)
     expr_ast = _normalize_expression(sg_node.expression, column)
-    expression = expr_ast.sql(dialect="duckdb")
+    expression = expr_ast.sql(dialect=DIALECT)
     values, value_count, used_predicate = _fetch_values(
         conn, model, column, target_model, target_predicate, max_values=max_values
     )
@@ -507,7 +531,7 @@ def _substitute_ast(
         values, count = entry
         return _values_to_expr(values, count, max_values)
 
-    return expr.copy().transform(transform).sql(dialect="duckdb")
+    return expr.copy().transform(transform).sql(dialect=DIALECT)
 
 
 def _values_to_expr(values: tuple[Any, ...], total_count: int, max_values: int | None) -> exp.Expr:

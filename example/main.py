@@ -5,11 +5,9 @@ Run from the `example/` directory:
     uv run python generate_data.py            # one-time: write the parquet sources
     uv run --env-file ../.env python main.py  # set OPENAI_API_KEY for the LLM step
 
-`raw_orders` is a Python model (`models/raw_orders.py`) that delegates to
-`helpers.load_data`. Switch its backend without touching any SQL:
-
-    UNWIND_SOURCE_MODE=parquet   uv run python main.py   # default
-    UNWIND_SOURCE_MODE=oracle    uv run python main.py   # needs oracledb + ORACLE_DSN
+`raw_orders` is a Python model (`models/raw_orders.py`) that reads the bundled
+parquet fixture via `pyarrow`. Edit `models/helpers.py` to wire it to your own
+source (Postgres, Oracle, S3, ...) — Unwind ships no DB-specific dependencies.
 """
 
 import os
@@ -21,21 +19,18 @@ import unwind
 #    defining `def model(context)` is registered as a Python model in the DAG.
 project = unwind.load("models/")
 
-# 1. Alternative : charger les SQL depuis une base de données (SQLAlchemy URL).
-#    `kind_column` permet de distinguer les modèles des macros Jinja partagées,
-#    `where` filtre les lignes (multi-projet / multi-tenant).
-#    Installer l'extra : `uv pip install "unwind-sql[db]"`.
-# project = unwind.load_from_db(
-#     connection_string="postgresql://user:pass@host:port/dbname",
-#     table="sql_definitions",
-#     name_column="name",
-#     sql_column="sql_code",
-#     kind_column="kind",            # 'model' | 'macro'
-#     where="project = 'retail'",    # optionnel
-# )
+# 1. Alternative : charger les définitions SQL depuis des lignes que vous
+#    fetchez vous-même (table de catalogue, registry YAML, endpoint HTTP, ...).
+#    Unwind ne se connecte à rien — c'est vous qui fournissez les rows.
+#
+# rows = [
+#     {"name": "stg_users", "sql": "SELECT id FROM raw_users", "kind": "model"},
+#     {"name": "plus_one", "sql": "{% macro plus_one(c) %}{{c}}+1{% endmacro %}", "kind": "macro"},
+# ]
+# project = unwind.load_from_rows(rows, origin="catalog.sql_defs")
 
-# 2. Exécution du DAG avec DuckDB
-run_result = project.run(engine="duckdb", vars={"d_reporting": "31/10/2025"}, debug=True)
+# 2. Exécution du DAG sur DuckDB
+run_result = project.run(vars={"d_reporting": "31/10/2025"}, debug=True)
 print(f"\n{len(run_result.executed)} models executed in {run_result.total_duration_s:.2f}s")
 
 # par défaut, .run() execute tout le DAG, mais on peut aussi cibler une table spécifique
