@@ -53,21 +53,38 @@ export function ColumnList({ modelName, columns, isSource, onImpactClick }: Prop
             className={`col ${active === c.name ? "active" : ""}`}
             onClick={() => setActive(c.name)}
           >
-            <span>{c.name}</span>
-            <span className="ty">{c.type}</span>
-            <button
-              type="button"
-              className="col-impact"
-              title={`Downstream impact of ${modelName}.${c.name}`}
-              onClick={(e) => {
-                // Don't bubble: opening the impact view shouldn't also
-                // switch the column lineage selection underneath.
-                e.stopPropagation();
-                onImpactClick(modelName, c.name);
-              }}
-            >
-              ↓ Impact
-            </button>
+            <div className="col-row">
+              <span className="col-name">{c.name}</span>
+              <span className="ty">{c.type}</span>
+              <button
+                type="button"
+                className="col-impact"
+                title={`Downstream impact of ${modelName}.${c.name}`}
+                onClick={(e) => {
+                  // Don't bubble: opening the impact view shouldn't also
+                  // switch the column lineage selection underneath.
+                  e.stopPropagation();
+                  onImpactClick(modelName, c.name);
+                }}
+              >
+                ↓ Impact
+              </button>
+            </div>
+            {c.description ? (
+              <p
+                className={`col-desc ${c.inherited_from ? "col-desc--inherited" : ""}`}
+                title={
+                  c.inherited_from
+                    ? `Inherited from ${c.inherited_from}`
+                    : undefined
+                }
+              >
+                {c.description}
+                {c.inherited_from ? (
+                  <span className="col-desc-tag"> · from {c.inherited_from}</span>
+                ) : null}
+              </p>
+            ) : null}
           </li>
         ))}
       </ul>

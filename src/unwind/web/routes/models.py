@@ -24,10 +24,28 @@ def get_model(name: str, state: StateDep) -> dict[str, Any]:
     row = state.conn.execute(f"SELECT COUNT(*) FROM {_quote_ident(name)}").fetchone()
     assert row is not None
     source, language = _source_and_language(model)
+    # Merge in documentation when it's already built — keeps `/api/model`
+    # lightweight (no lineage walk here) but lets the UI render descriptions
+    # when /api/docs has been hit at least once.
+    docs_entry = state.documentation.models.get(name) if state.documentation else None
+    if docs_entry is not None:
+        description_by_column = {
+            col.name: {
+                "description": col.description,
+                "inherited_from": col.inherited_from,
+            }
+            for col in docs_entry.columns
+        }
+        for column in columns:
+            extra = description_by_column.get(column["name"])
+            if extra is not None:
+                column["description"] = extra["description"] or ""
+                column["inherited_from"] = extra["inherited_from"] or ""
     return {
         "name": name,
         "language": language,
         "source": source,
+        "description": model.description,
         "row_count": int(row[0]),
         "columns": columns,
         "upstream": sorted(state.dag.nodes[name].depends_on_models),

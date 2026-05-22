@@ -3,9 +3,11 @@ import type {
   ColumnImpact,
   ColumnLineage,
   DagPayload,
+  Documentation,
   InvestigateEvent,
   ModelData,
   ModelDetail,
+  ModelDoc,
   TraceResult,
 } from "./types";
 
@@ -42,6 +44,19 @@ export function fetchColumnLineage(
   return jsonGet(
     `/api/column/${encodeURIComponent(model)}/${encodeURIComponent(column)}`,
   );
+}
+
+export function fetchDocs(): Promise<Documentation> {
+  return jsonGet("/api/docs");
+}
+
+export function fetchModelDoc(name: string): Promise<ModelDoc> {
+  return jsonGet(`/api/docs/${encodeURIComponent(name)}`);
+}
+
+/** Public URL for downloading the full docs in the requested format. */
+export function docsExportUrl(format: "markdown" | "json"): string {
+  return `/api/docs/export?format=${format}`;
 }
 
 export function fetchColumnImpact(

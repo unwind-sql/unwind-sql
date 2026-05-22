@@ -4,6 +4,7 @@ import { highlightSource } from "../sql";
 import type { CellValue, ColumnImpact, ModelDetail, ModelLanguage } from "../types";
 import { ColumnList } from "./ColumnList";
 import { DataTable } from "./DataTable";
+import { DocView } from "./DocView";
 import { ImpactPanel } from "./ImpactPanel";
 
 interface Props {
@@ -21,7 +22,7 @@ interface Props {
   ) => void;
 }
 
-type Tab = "columns" | "source" | "data";
+type Tab = "columns" | "source" | "data" | "doc";
 
 const LANG_LABEL: Record<ModelLanguage, string> = {
   sql: "SQL",
@@ -117,6 +118,9 @@ export function Panel({
           {sourceLabel}
         </span>
       </h2>
+      {model.description ? (
+        <p className="model-description">{model.description}</p>
+      ) : null}
       <p className="meta">
         {model.row_count.toLocaleString()} rows · {model.upstream.length}{" "}
         upstream · {model.downstream.length} downstream
@@ -125,6 +129,7 @@ export function Panel({
         <Btn label="Columns" active={tab === "columns"} on={() => setTab("columns")} />
         <Btn label={sourceLabel} active={tab === "source"} on={() => setTab("source")} />
         <Btn label="Data" active={tab === "data"} on={() => setTab("data")} />
+        <Btn label="📖 Doc" active={tab === "doc"} on={() => setTab("doc")} />
       </div>
       {tab === "columns" ? (
         <ColumnList
@@ -142,7 +147,7 @@ export function Panel({
             }}
           />
         </pre>
-      ) : (
+      ) : tab === "data" ? (
         <DataTable
           modelName={model.name}
           isSource={isSource}
@@ -150,6 +155,8 @@ export function Panel({
             onCellClick(model.name, column, where, value, isSource)
           }
         />
+      ) : (
+        <DocView modelName={model.name} />
       )}
     </div>
   );

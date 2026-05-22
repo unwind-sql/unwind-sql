@@ -70,6 +70,7 @@ def render_project(
             location=model.location,
             rendered_location=rendered_location,
             disabled=model.disabled,
+            description=model.description,
         )
 
     return Project(

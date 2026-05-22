@@ -118,7 +118,7 @@ def _load_sql_models(
             previous = models[name].path
             raise ProjectLoadError(f"duplicate model name {name!r}: {previous} and {sql_path}")
         raw_sql = sql_path.read_text(encoding="utf-8")
-        group, tags, materialized, location, disabled = _parse_metadata(
+        group, tags, materialized, location, disabled, description = _parse_metadata(
             raw_sql, source=sql_path
         )
         models[name] = Model(
@@ -131,6 +131,7 @@ def _load_sql_models(
             materialized=materialized,
             location=location,
             disabled=disabled,
+            description=description,
         )
 
 
@@ -156,6 +157,7 @@ def _load_python_models(
         group, tags, materialized, depends_on, disabled = _parse_python_metadata(
             module, source=py_path
         )
+        description = _read_module_docstring(module)
         models[name] = PythonModel(
             name=name,
             func=func,
@@ -166,6 +168,7 @@ def _load_python_models(
             tags=tags,
             materialized=materialized,
             disabled=disabled,
+            description=description,
         )
 
 
@@ -245,6 +248,18 @@ def _parse_python_metadata(
     return group, tags, materialized, depends_on, disabled
 
 
+def _read_module_docstring(module: ModuleType) -> str | None:
+    """Return the module-level docstring as the Python model's description.
+
+    Empty / whitespace-only docstrings are normalised to `None`.
+    """
+    doc = getattr(module, "__doc__", None)
+    if not isinstance(doc, str):
+        return None
+    stripped = doc.strip()
+    return stripped or None
+
+
 def _read_str_or_none(module: ModuleType, attr: str, *, source: Path) -> str | None:
     value = getattr(module, attr, None)
     if value is None:
@@ -299,18 +314,20 @@ def _is_iterable(value: Any) -> bool:
 
 def _parse_metadata(  # noqa: PLR0912, PLR0915
     raw_sql: str, *, source: str | Path
-) -> tuple[str | None, tuple[str, ...], str, str | None, bool]:
-    """Read leading `-- @key: value` directives.
+) -> tuple[str | None, tuple[str, ...], str, str | None, bool, str | None]:
+    """Read leading `-- @key: value` directives and any free-form description.
 
-    Recognised: `@group`, `@tags`, `@materialized`, `@location`, `@disabled`.
-    Plain comments and unknown directives are silently skipped. Returns
-    `(group, tags, materialized, location, disabled)`.
+    Recognised directives: `@group`, `@tags`, `@materialized`, `@location`,
+    `@disabled`. Every other `--` line in the header (before the first non-
+    comment line) is joined together as the model's description.
+    Returns `(group, tags, materialized, location, disabled, description)`.
     """
     group: str | None = None
     tags: tuple[str, ...] = ()
     materialized: str | None = None
     location: str | None = None
     disabled: bool | None = None
+    description_lines: list[str] = []
     for line in raw_sql.splitlines():
         stripped = line.strip()
         if not stripped:
@@ -319,7 +336,9 @@ def _parse_metadata(  # noqa: PLR0912, PLR0915
             break  # first non-comment line ends the header
         match = _DIRECTIVE_RE.match(stripped)
         if match is None:
-            continue  # plain comment, keep scanning
+            # Plain comment — capture as part of the description.
+            description_lines.append(stripped.removeprefix("--").strip())
+            continue
         key, value = match.group(1), match.group(2).strip()
         if key == "group":
             if group is not None:
@@ -369,4 +388,5 @@ def _parse_metadata(  # noqa: PLR0912, PLR0915
             f"'@location' is only valid with '@materialized: external' in {source}"
         )
 
-    return group, tags, materialized or "table", location, bool(disabled)
+    description = "\n".join(description_lines).strip() or None
+    return group, tags, materialized or "table", location, bool(disabled), description

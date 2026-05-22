@@ -26,6 +26,8 @@ export interface DagNode {
   materialized: Materialization;
   location: string | null;
   disabled: boolean;
+  /** First non-empty line of the model description, or null when none. */
+  description: string | null;
 }
 
 export interface DagEdge {
@@ -48,16 +50,64 @@ export interface DagPayload {
 export interface ColumnDescriptor {
   name: string;
   type: string;
+  /** Native (trailing comment) or inherited column description. */
+  description?: string;
+  /** When the description was inherited via column lineage, the source `model.column`. */
+  inherited_from?: string;
 }
 
 export interface ModelDetail {
   name: string;
   language: ModelLanguage;
   source: string;
+  description: string | null;
   row_count: number;
   columns: ColumnDescriptor[];
   upstream: string[];
   downstream: string[];
+}
+
+// GET /api/docs/{name} — see src/unwind/docs/ir.py
+export interface ColumnStats {
+  row_count: number;
+  null_count: number;
+  distinct_count: number;
+}
+
+export interface ColumnDoc {
+  name: string;
+  type: string | null;
+  description: string | null;
+  inherited_from: string | null;
+  stats: ColumnStats | null;
+}
+
+export interface Annotation {
+  line: number;
+  text: string;
+}
+
+export interface ModelDoc {
+  name: string;
+  description: string | null;
+  group: string | null;
+  tags: string[];
+  materialized: Materialization;
+  kind: "sql" | "python";
+  columns: ColumnDoc[];
+  annotations: Annotation[];
+  upstreams: string[];
+  downstreams: string[];
+  rendered_sql: string | null;
+}
+
+export interface Documentation {
+  _schema: {
+    purpose: string;
+    fields: Record<string, string>;
+  };
+  project_root: string | null;
+  models: ModelDoc[];
 }
 
 // GET /api/model/{name}/data

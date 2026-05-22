@@ -40,6 +40,9 @@ def _dag_payload(state: AppState) -> dict[str, Any]:
                 "materialized": model.materialized,
                 "location": model.rendered_location,
                 "disabled": model.disabled,
+                # First non-empty line of the description — enough for a
+                # node tooltip. Full description is exposed via /api/model.
+                "description": _short_description(model.description),
             }
         )
         if model.group is not None:
@@ -52,6 +55,17 @@ def _dag_payload(state: AppState) -> dict[str, Any]:
     ]
     groups = [{"id": gid, "members": members} for gid, members in group_members.items()]
     return {"nodes": nodes, "edges": edges, "groups": groups}
+
+
+def _short_description(description: str | None) -> str | None:
+    """Return the first non-empty line, trimmed to a reasonable tooltip size."""
+    if not description:
+        return None
+    for line in description.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped if len(stripped) <= 160 else stripped[:157] + "…"
+    return None
 
 
 def _classify(name: str) -> str:

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from unwind._progress import ProgressCallback
     from unwind.dag import DAG
+    from unwind.docs.ir import Documentation
     from unwind.impact import ColumnImpact
     from unwind.investigator import Investigator
     from unwind.lineage import ColumnRef, TableLineage
@@ -58,6 +59,10 @@ class Model:
     location: str | None = None
     rendered_location: str | None = None
     disabled: bool = False
+    # Free-form human description, joined from leading `--` comments that
+    # are not `-- @directive:` lines. `None` when the header has no such
+    # comments. Surfaced by `Project.docs()`.
+    description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +216,8 @@ class PythonModel:
     location: str | None = None
     rendered_location: str | None = None
     disabled: bool = False
+    # Module-level docstring captured at load time. Surfaced by `Project.docs()`.
+    description: str | None = None
 
 
 ModelOrPython = Model | PythonModel
@@ -335,6 +342,30 @@ class Project:
             max_values=max_values,
             connection=connection,
             qualified_sources=qualified_sources,
+        )
+
+    def docs(
+        self,
+        *,
+        vars: Mapping[str, object] | None = None,
+        connection: duckdb.DuckDBPyConnection | None = None,
+        with_stats: bool = False,
+    ) -> Documentation:
+        """Build the project's documentation IR.
+
+        Without a `connection`, the documentation contains descriptions
+        (from header comments + trailing column comments) and structure
+        (groups, tags, materialization, upstream/downstream). Pass
+        `connection=` — typically the live one from `Project.run()` — to
+        also get DuckDB column types and, with `with_stats=True`, sample
+        statistics per column.
+        """
+        from unwind.docs.build import build_documentation  # noqa: PLC0415
+
+        return build_documentation(
+            self._ensure_rendered(vars),
+            connection=connection,
+            with_stats=with_stats,
         )
 
     def get_investigator(

@@ -16,6 +16,7 @@ export interface ModelNodeData extends Record<string, unknown> {
   relation?: NodeRelation;
   impactRole?: ImpactRole | null;
   disabled?: boolean;
+  description?: string | null;
 }
 
 const LANGUAGE_BADGE: Record<ModelLanguage, string> = {
@@ -106,6 +107,7 @@ export function ModelNode({ data, selected }: NodeProps) {
   const impact = !selected ? impactStyle(d.impactRole ?? null) : null;
   const relStyle = !selected && !impact ? relationStyle(d.relation ?? null) : null;
   const disabled = d.disabled === true;
+  const tooltip = buildTooltip(d, disabled);
   return (
     <div
       style={{
@@ -131,7 +133,7 @@ export function ModelNode({ data, selected }: NodeProps) {
         opacity: disabled ? 0.7 : 1,
         transition: "box-shadow 120ms ease, border-color 120ms ease",
       }}
-      title={disabled ? "disabled (bypassed)" : undefined}
+      title={tooltip}
     >
       <div
         style={{
@@ -267,6 +269,19 @@ export function ModelNode({ data, selected }: NodeProps) {
       <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
     </div>
   );
+}
+
+/**
+ * Build the native HTML `title` tooltip for a node: shows the description
+ * (when present), tags, and disabled state. Falls back to the existing
+ * "disabled" hint when nothing else is informative.
+ */
+function buildTooltip(d: ModelNodeData, disabled: boolean): string | undefined {
+  const lines: string[] = [];
+  if (d.description) lines.push(d.description);
+  if (d.tags.length > 0) lines.push(`tags: ${d.tags.join(", ")}`);
+  if (disabled) lines.push("disabled (bypassed)");
+  return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
 function formatCount(n: number): string {

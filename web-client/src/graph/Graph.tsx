@@ -55,6 +55,7 @@ function payloadToFlow(
       tags: n.tags,
       rowCount: n.row_count,
       disabled: n.disabled,
+      description: n.description,
     },
   }));
 

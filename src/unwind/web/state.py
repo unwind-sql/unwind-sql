@@ -20,6 +20,7 @@ from unwind.project import Project
 if TYPE_CHECKING:
     # `pydantic_ai` is an optional extra, so types from `unwind.investigator`
     # stay behind TYPE_CHECKING to keep this module importable without it.
+    from unwind.docs.ir import Documentation
     from unwind.investigator import Explanation, Investigator
 
 
@@ -43,6 +44,8 @@ class AppState:
     _qualified_sources: dict[str, str] | None = None
     investigator: Investigator | None = None  # built lazily on first /api/investigate
     explanation_cache: OrderedDict[CacheKey, Explanation] = field(default_factory=OrderedDict)
+    # Built lazily on the first /api/docs* call; immutable for the life of the run.
+    documentation: Documentation | None = None
 
     def qualified_sources(self) -> dict[str, str]:
         """Lazily compute and memoize per-model qualified SQL.

@@ -70,7 +70,7 @@ def load_from_rows(
 
         if name in models:
             raise ProjectLoadError(f"duplicate model name {name!r} in {origin}")
-        group, tags, materialized, location, disabled = _parse_metadata(
+        group, tags, materialized, location, disabled, description = _parse_metadata(
             raw_sql, source=row_origin
         )
         models[name] = Model(
@@ -83,6 +83,7 @@ def load_from_rows(
             materialized=materialized,
             location=location,
             disabled=disabled,
+            description=description,
         )
 
     if not seen_any:

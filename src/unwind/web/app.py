@@ -15,7 +15,16 @@ from starlette.types import Scope
 
 from unwind.errors import UnwindError
 from unwind.project import Project
-from unwind.web.routes import cell, dag, data, impact, investigate, lineage, models
+from unwind.web.routes import (
+    cell,
+    dag,
+    data,
+    docs,
+    impact,
+    investigate,
+    lineage,
+    models,
+)
 from unwind.web.state import build_state
 
 if TYPE_CHECKING:
@@ -87,6 +96,7 @@ def build_app(
     app.include_router(impact.router)
     app.include_router(cell.router)
     app.include_router(investigate.router)
+    app.include_router(docs.router)
 
     app.mount("/", _NoCacheHtmlStatic(directory=_STATIC_DIR, html=True), name="static")
     return app

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fetchColumnImpact } from "./api";
+import { docsExportUrl, fetchColumnImpact } from "./api";
 import { CellModal, type CellRequest } from "./cell/CellModal";
 import { Graph } from "./graph/Graph";
 import { Panel } from "./panel/Panel";
@@ -51,6 +51,24 @@ export function App() {
             Impact analysis failed: {impactError}
           </span>
         ) : null}
+        <nav className="app-export" aria-label="Documentation export">
+          <a
+            href={docsExportUrl("markdown")}
+            className="export-btn"
+            download="unwind-docs.md"
+            title="Download a Markdown documentation file for the whole project"
+          >
+            ⬇ Docs (.md)
+          </a>
+          <a
+            href={docsExportUrl("json")}
+            className="export-btn"
+            download="unwind-docs.json"
+            title="Download the JSON manifest (LLM-ready semantic layer)"
+          >
+            ⬇ Docs (.json)
+          </a>
+        </nav>
       </header>
       <div className="app-main">
         <main className="app-graph">

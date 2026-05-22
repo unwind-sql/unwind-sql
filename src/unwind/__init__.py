@@ -6,6 +6,14 @@ from unwind.__about__ import __version__
 from unwind._progress import ProgressCallback, RunEvent
 from unwind.dag import DAG, DAGError, Node
 from unwind.db_loader import load_from_rows
+from unwind.docs import (
+    Annotation,
+    ColumnDoc,
+    ColumnStats,
+    Documentation,
+    ModelDoc,
+    build_documentation,
+)
 from unwind.errors import ProjectLoadError, TemplateRenderError, UnwindError
 from unwind.impact import ColumnImpact, ImpactedColumn, ImpactEdge, ImpactError
 from unwind.lineage import ColumnRef, LineageError, TableLineage
@@ -24,9 +32,13 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DAG",
+    "Annotation",
+    "ColumnDoc",
     "ColumnImpact",
     "ColumnRef",
+    "ColumnStats",
     "DAGError",
+    "Documentation",
     "ExecutedModel",
     "Explanation",
     "Finding",
@@ -38,6 +50,7 @@ __all__ = [
     "LineageError",
     "Model",
     "ModelContext",
+    "ModelDoc",
     "Node",
     "ProgressCallback",
     "Project",
@@ -53,6 +66,7 @@ __all__ = [
     "TraceResult",
     "UnwindError",
     "__version__",
+    "build_documentation",
     "load",
     "load_from_rows",
 ]
