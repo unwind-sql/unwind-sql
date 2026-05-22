@@ -6,21 +6,35 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import { useReactFlow, type Node } from "@xyflow/react";
+import { useReactFlow } from "@xyflow/react";
 import { paletteFor } from "./kinds";
 import type { ModelKind } from "../types";
 
+export interface SearchEntry {
+  id: string;
+  kind: ModelKind;
+  group: string | null;
+}
+
 interface Props {
   /**
+   * Full list of selectable models, in stable order. Comes from the raw
+   * DAG payload (not React Flow's current store) so that members of a
+   * collapsed group remain searchable — picking one expands the group.
+   */
+  searchSource: ReadonlyArray<SearchEntry>;
+  /**
    * Called when the user picks a node from the dropdown. Mirrors what a
-   * regular click on the node would do : opens the right-hand panel.
+   * regular click on the node would do : opens the right-hand panel and
+   * may expand the containing group if it was collapsed (the parent is
+   * responsible for that bookkeeping).
    */
   onSelect: (nodeId: string) => void;
 }
 
 const MAX_RESULTS = 10;
 
-export function NodeSearch({ onSelect }: Props) {
+export function NodeSearch({ searchSource, onSelect }: Props) {
   const rf = useReactFlow();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
@@ -44,17 +58,13 @@ export function NodeSearch({ onSelect }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Re-read the candidate nodes on every render — React Flow's internal
-  // store is the source of truth and the parent feeds new arrays into
-  // <ReactFlow nodes={...}>, so a fresh `getNodes()` is enough.
-  const results = useMemo<Node[]>(() => {
+  const results = useMemo<SearchEntry[]>(() => {
     if (!query.trim()) return [];
     const needle = query.trim().toLowerCase();
-    const candidates = rf.getNodes().filter((n) => n.type === "model");
-    return candidates
+    return searchSource
       .filter((n) => n.id.toLowerCase().includes(needle))
       .slice(0, MAX_RESULTS);
-  }, [query, rf]);
+  }, [query, searchSource]);
 
   // Reset highlight when results change so the first match is always armed.
   useEffect(() => {
@@ -62,11 +72,19 @@ export function NodeSearch({ onSelect }: Props) {
   }, [query]);
 
   const pick = useCallback(
-    (n: Node) => {
+    (n: SearchEntry) => {
       onSelect(n.id);
-      // Smooth-scroll the viewport so the picked node sits roughly centered
-      // with comfortable breathing room around it.
-      rf.fitView({ nodes: [{ id: n.id }], padding: 0.6, duration: 500 });
+      // `onSelect` may have queued a state update (e.g. expanding the
+      // collapsed group that contains `n.id`). React Flow's internal store
+      // updates only after the parent re-renders, so we defer `fitView`
+      // by two animation frames to give the rendered DAG time to settle.
+      // Without this, `fitView` would silently no-op when the node wasn't
+      // in the store yet.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          rf.fitView({ nodes: [{ id: n.id }], padding: 0.6, duration: 500 });
+        });
+      });
       setOpen(false);
       setQuery("");
       inputRef.current?.blur();
@@ -122,8 +140,7 @@ export function NodeSearch({ onSelect }: Props) {
           onMouseDown={(e) => e.preventDefault()}
         >
           {results.map((n, i) => {
-            const data = n.data as { kind?: ModelKind; group?: string | null };
-            const palette = paletteFor((data.kind as ModelKind) ?? "model");
+            const palette = paletteFor(n.kind);
             return (
               <li
                 key={n.id}
@@ -137,8 +154,8 @@ export function NodeSearch({ onSelect }: Props) {
                   aria-hidden
                 />
                 <span className="node-search-result-name">{n.id}</span>
-                {data.group ? (
-                  <span className="node-search-result-group">{data.group}</span>
+                {n.group ? (
+                  <span className="node-search-result-group">{n.group}</span>
                 ) : null}
               </li>
             );

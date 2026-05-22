@@ -1130,6 +1130,177 @@ details.trace-node[open] > summary::before {
   flex: 0 0 auto;
 }
 
+/* Filter panel : kind + group checkboxes, anchored under the node search. */
+.graph-top-left-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 280px;
+}
+
+.filter-panel {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.filter-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 6px 10px;
+  font: inherit;
+  color: #222;
+  cursor: pointer;
+  text-align: left;
+}
+
+.filter-panel-toggle:hover {
+  background: #f8fafc;
+}
+
+.filter-panel-icon {
+  color: #4c6ef5;
+  font-size: 13px;
+}
+
+.filter-panel-summary {
+  flex: 1;
+  color: #94a3b8;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.filter-panel-chevron {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.filter-panel-body {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.filter-panel-section header {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.filter-panel-section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.filter-panel-section label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.filter-panel-section label:hover {
+  background: #f1f5f9;
+}
+
+.filter-panel-section input[type="checkbox"] {
+  accent-color: #4c6ef5;
+  cursor: pointer;
+}
+
+.filter-panel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.filter-panel-off {
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
+.filter-panel-clear {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #555;
+  cursor: pointer;
+}
+
+.filter-panel-clear:hover {
+  background: #f1f5f9;
+}
+
+/* Collapse/expand all toolbar for effective groups. */
+.group-toolbar {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #555;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.group-toolbar-summary {
+  flex: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.group-toolbar button {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: #222;
+  cursor: pointer;
+}
+
+.group-toolbar button:hover:not(:disabled) {
+  background: #eef2ff;
+  border-color: var(--accent);
+}
+
+.group-toolbar button:disabled {
+  color: #94a3b8;
+  cursor: default;
+  background: #fff;
+}
+
 /* React Flow top-right edge style toggle */
 .edge-style-panel {
   background: #fff;

@@ -8,6 +8,17 @@ import type { Edge, Node } from "@xyflow/react";
 const NODE_WIDTH = 180;
 const NODE_HEIGHT = 56;
 
+/**
+ * Return the explicit `width`/`height` carried by a Node (when a caller
+ * pre-sizes it — e.g. a collapsed-group representative wider than a member
+ * node) or the default footprint otherwise.
+ */
+function sizeOf(n: Node): { width: number; height: number } {
+  const width = typeof n.width === "number" ? n.width : NODE_WIDTH;
+  const height = typeof n.height === "number" ? n.height : NODE_HEIGHT;
+  return { width, height };
+}
+
 // dagre doesn't actually honor `paddingTop` on cluster nodes — it ignores the
 // option silently and packs members flush against the top edge, where they
 // overlap the group's title label. We work around it by *extending* every
@@ -99,7 +110,7 @@ export function layoutDag(
   }
 
   for (const n of nodes) {
-    g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    g.setNode(n.id, sizeOf(n));
     const parent = groupOf.get(n.id);
     if (parent !== undefined) g.setParent(n.id, `group:${parent}`);
   }
@@ -143,15 +154,16 @@ export function layoutDag(
     const pos = g.node(n.id);
     const parent = groupOf.get(n.id);
     const parentBounds = parent ? originalExtendedById.get(parent) : undefined;
-    const absX = pos.x - NODE_WIDTH / 2;
-    const absY = pos.y - NODE_HEIGHT / 2;
+    const { width, height } = sizeOf(n);
+    const absX = pos.x - width / 2;
+    const absY = pos.y - height / 2;
     return {
       ...n,
       position: parentBounds
         ? { x: absX - parentBounds.x, y: absY - parentBounds.y }
         : { x: absX, y: absY },
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
+      width,
+      height,
       ...(parent ? { parentId: `group:${parent}`, extent: "parent" } : {}),
       sourcePosition: "right",
       targetPosition: "left",

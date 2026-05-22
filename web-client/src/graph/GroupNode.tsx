@@ -5,6 +5,13 @@ export interface GroupNodeData extends Record<string, unknown> {
   border: string;
   fill: string;
   labelColor: string;
+  /**
+   * `true` when the cluster was synthesized client-side from kind prefixes
+   * (members lack an explicit `@group:` directive). We draw a dashed border
+   * and an italic / muted label so users understand the grouping is heuristic
+   * — not a deliberate choice in their project.
+   */
+  auto?: boolean;
 }
 
 /**
@@ -14,16 +21,18 @@ export interface GroupNodeData extends Record<string, unknown> {
  */
 export function GroupNode({ data }: NodeProps) {
   const d = data as GroupNodeData;
+  const auto = d.auto === true;
   return (
     <div
       style={{
         width: "100%",
         height: "100%",
         background: d.fill,
-        border: `1.5px solid ${d.border}`,
+        border: auto ? `1.5px dashed ${d.border}` : `1.5px solid ${d.border}`,
         borderRadius: 8,
         position: "relative",
         pointerEvents: "none",
+        opacity: auto ? 0.85 : 1,
       }}
     >
       <div
@@ -39,10 +48,24 @@ export function GroupNode({ data }: NodeProps) {
           color: d.labelColor,
           textTransform: "uppercase",
           letterSpacing: "0.06em",
+          fontStyle: auto ? "italic" : "normal",
           pointerEvents: "none",
         }}
       >
         {d.label}
+        {auto ? (
+          <span
+            style={{
+              marginLeft: 6,
+              fontSize: 9,
+              fontWeight: 600,
+              color: "#94a3b8",
+              letterSpacing: "0.04em",
+            }}
+          >
+            (auto)
+          </span>
+        ) : null}
       </div>
     </div>
   );
