@@ -7,29 +7,27 @@ from __future__ import annotations
 
 import statistics
 
+from dataclasses import replace
+
 import unwind
-from unwind.project import Model
+from unwind.project import Model, PythonModel
 
 
 def _override_materialization(project: unwind.Project, kind: str) -> None:
+    # Force `kind` on SQL models; Python models only support "table"/"view",
+    # so coerce anything else to "table" for them.
+    py_kind = kind if kind in ("table", "view") else "table"
     project.models = {
-        name: Model(
-            name=m.name,
-            path=m.path,
-            raw_sql=m.raw_sql,
-            rendered_sql=m.rendered_sql,
-            group=m.group,
-            tags=m.tags,
-            materialized=kind,
-        )
+        name: replace(m, materialized=py_kind if isinstance(m, PythonModel) else kind)
         for name, m in project.models.items()
+        if isinstance(m, (Model, PythonModel))
     }
 
 
 def _measure(force_kind: str | None, n: int) -> list[float]:
     durations: list[float] = []
     for _ in range(n):
-        project = unwind.load("sql/")
+        project = unwind.load("models/")
         if force_kind is not None:
             _override_materialization(project, force_kind)
         result = project.run(vars={"d_reporting": "31/10/2025"})

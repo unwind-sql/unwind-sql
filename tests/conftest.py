@@ -43,7 +43,7 @@ def tmp_project(tmp_path: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def fixture_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A standalone test project: a copy of `example/sql/` paired with a small,
+    """A standalone test project: a copy of `example/models/` paired with a small,
     hand-crafted parquet dataset written under a sibling `../data/` directory.
 
     Decouples the test suite from `example/data/`, which `generate_data.py` can

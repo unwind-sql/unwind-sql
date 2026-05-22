@@ -69,8 +69,8 @@ The script:
 4. If `OPENAI_API_KEY` is set, asks an LLM to explain the trace in plain
    language and flag suspicious values (uses `pydantic-ai`, swap providers
    by passing `llm_provider="anthropic"` etc.).
-5. Opens a browser tab on the **web UI** (Cytoscape.js DAG + per-column
-   lineage tree). Press `Ctrl+C` to stop.
+5. Opens a browser tab on the **web UI** (React Flow / `@xyflow/react` DAG
+   + per-column lineage tree, dagre layout). Press `Ctrl+C` to stop.
 
 `raw_orders` in the example is a **Python model** ([example/models/raw_orders.py](example/models/raw_orders.py))
 that reads the bundled parquet fixture via `pyarrow`. To wire it to your own
